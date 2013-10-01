@@ -40,7 +40,7 @@ describe Bosh::Agent::Message::MigrateDisk do
 
     it 'should migrate to the new persistent disk' do
       # Remount old disk as read-only
-      Bosh::Agent::Message::DiskUtil.should_receive(:umount_guard).with(@mount_path).ordered
+      Bosh::Agent::DiskUtil.should_receive(:umount_guard).with(@mount_path).ordered
       platform.stub(:find_disk_by_cid).with('old_disk_cid').and_return(old_disk)
       old_disk.should_receive(:mount).with(@mount_path, '-o ro').ordered.and_return(true)
 
@@ -49,8 +49,8 @@ describe Bosh::Agent::Message::MigrateDisk do
       fake_migrator.should_receive(:copy).with().ordered
 
       # Unmount all disks
-      Bosh::Agent::Message::DiskUtil.should_receive(:umount_guard).with(@mount_path).ordered
-      Bosh::Agent::Message::DiskUtil.should_receive(:umount_guard).with(@migration_mount_path).ordered
+      Bosh::Agent::DiskUtil.should_receive(:umount_guard).with(@mount_path).ordered
+      Bosh::Agent::DiskUtil.should_receive(:umount_guard).with(@migration_mount_path).ordered
 
       # Remount new disk
       new_disk = double('new disk', partition_path: nil)
@@ -70,7 +70,7 @@ describe Bosh::Agent::Message::MigrateDisk do
 
     it 'does not migrate data if either disk is not mounted' do
       # Remount old disk as read-only
-      Bosh::Agent::Message::DiskUtil.should_receive(:umount_guard).with(@mount_path).ordered
+      Bosh::Agent::DiskUtil.should_receive(:umount_guard).with(@mount_path).ordered
       platform.stub(:find_disk_by_cid).with('old_disk_cid').and_return(old_disk)
       old_disk.should_receive(:mount).with(@mount_path, '-o ro').ordered.and_return(true)
 
@@ -78,8 +78,8 @@ describe Bosh::Agent::Message::MigrateDisk do
       Bosh::Agent::DirCopier.should_not_receive(:new)
 
       # Unmount all disks
-      Bosh::Agent::Message::DiskUtil.should_receive(:umount_guard).with(@mount_path).ordered
-      Bosh::Agent::Message::DiskUtil.should_receive(:umount_guard).with(@migration_mount_path).ordered
+      Bosh::Agent::DiskUtil.should_receive(:umount_guard).with(@mount_path).ordered
+      Bosh::Agent::DiskUtil.should_receive(:umount_guard).with(@migration_mount_path).ordered
 
       # Remount new disk
       new_disk = double('new disk', partition_path: nil)
@@ -98,7 +98,7 @@ describe Bosh::Agent::Message::MigrateDisk do
     end
 
     it 'raises Bosh::Agent::MessageHandlerError' do
-      Bosh::Agent::Message::DiskUtil.stub(:umount_guard).with(@mount_path)
+      Bosh::Agent::DiskUtil.stub(:umount_guard).with(@mount_path)
       expect {
         Bosh::Agent::Message::MigrateDisk.process(['old_disk_cid', 'new_disk_cid'])
       }.to raise_error(/Failed to mount: .* #{@mount_path}/)
@@ -116,7 +116,7 @@ describe Bosh::Agent::Message::MigrateDisk do
     end
 
     it 'raises Bosh::Agent::MessageHandlerError' do
-      Bosh::Agent::Message::DiskUtil.stub(:umount_guard)
+      Bosh::Agent::DiskUtil.stub(:umount_guard)
 
       expect {
         Bosh::Agent::Message::MigrateDisk.process(['old_disk_cid', 'new_disk_cid'])
@@ -130,10 +130,10 @@ describe Bosh::Agent::Message::UnmountDisk do
     platform = double(:platform)
     Bosh::Agent::Config.stub(:platform).and_return(platform)
     platform.stub(:lookup_disk_by_cid).and_return("/dev/sdy")
-    Bosh::Agent::Message::DiskUtil.stub(:mount_entry).and_return('/dev/sdy1 /foomount fstype')
+    Bosh::Agent::DiskUtil.stub(:mount_entry).and_return('/dev/sdy1 /foomount fstype')
 
     handler = Bosh::Agent::Message::UnmountDisk.new
-    Bosh::Agent::Message::DiskUtil.stub(:umount_guard)
+    Bosh::Agent::DiskUtil.stub(:umount_guard)
 
     handler.unmount(["4"]).should == { :message => "Unmounted /dev/sdy1 on /foomount"}
   end
@@ -142,7 +142,7 @@ describe Bosh::Agent::Message::UnmountDisk do
     platform = double(:platform)
     Bosh::Agent::Config.stub(:platform).and_return(platform)
     platform.stub(:lookup_disk_by_cid).and_return("/dev/sdx")
-    Bosh::Agent::Message::DiskUtil.stub(:mount_entry).and_return(nil)
+    Bosh::Agent::DiskUtil.stub(:mount_entry).and_return(nil)
 
     handler = Bosh::Agent::Message::UnmountDisk.new
     handler.stub(:umount_guard)
@@ -163,7 +163,7 @@ describe Bosh::Agent::Message::ListDisk do
     platform = double(:platform)
     Bosh::Agent::Config.stub(:platform).and_return(platform)
     platform.stub(:lookup_disk_by_cid).and_return("/dev/sdy")
-    Bosh::Agent::Message::DiskUtil.stub(:mount_entry).and_return('/dev/sdy1 /foomount fstype')
+    Bosh::Agent::DiskUtil.stub(:mount_entry).and_return('/dev/sdy1 /foomount fstype')
 
     settings = { "disks" => { "persistent" => { 199 => 2 }}}
     Bosh::Agent::Config.settings = settings
@@ -173,58 +173,3 @@ describe Bosh::Agent::Message::ListDisk do
 
 end
 
-describe Bosh::Agent::Message::DiskUtil do
-  describe '#get_usage' do
-    it 'should return the disk usage' do
-      base = Bosh::Agent::Config.base_dir
-
-      fs_list = [
-          double('system', :dir_name => '/'),
-          double('ephermal', :dir_name => File.join(base, 'data')),
-          double('persistent', :dir_name => File.join(base, 'store'))
-      ]
-
-      sigar = double('sigar', :file_system_list => fs_list, :logger= => nil)
-
-      u1 = double('usage', :use_percent => 0.69)
-      sigar.should_receive(:file_system_usage).with('/').and_return(u1)
-
-      u2 = double('usage', :use_percent => 0.73)
-      sigar.should_receive(:file_system_usage).with(File.join(base, 'data')).and_return(u2)
-
-      u3 = double('usage', :use_percent => 0.11)
-      sigar.should_receive(:file_system_usage).with(File.join(base, 'store')).and_return(u3)
-
-      Sigar.stub(:new => sigar)
-
-      described_class.get_usage.should == {
-          :system => {:percent => '69'},
-          :ephemeral => {:percent => '73'},
-          :persistent => {:percent => '11'}
-      }
-    end
-
-    it 'should not return ephemeral and persistent disks usages if do not exist' do
-      base = Bosh::Agent::Config.base_dir
-
-      fs_list = [
-          double('system', :dir_name => '/'),
-      ]
-
-      sigar = double('sigar', :file_system_list => fs_list, :logger= => nil)
-
-      u1 = double('usage', :use_percent => 0.69)
-      sigar.should_receive(:file_system_usage).with('/').and_return(u1)
-
-      sigar.should_not_receive(:file_system_usage).with(File.join(base, 'data'))
-
-      sigar.should_not_receive(:file_system_usage).with(File.join(base, 'store'))
-
-      Sigar.stub(:new => sigar)
-
-      described_class.get_usage.should == {
-          :system => {:percent => '69'}
-      }
-    end
-  end
-end
