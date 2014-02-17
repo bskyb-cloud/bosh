@@ -1,8 +1,10 @@
 module Bosh::Dev
   class UriProvider
-    PIPELINE_BUCKET  = 'bosh-ci-pipeline'
-    ARTIFACTS_BUCKET = 'bosh-jenkins-artifacts'
-    RELEASE_PATCHES_BUCKET = 'bosh-jenkins-release-patches'
+    PIPELINE_BUCKET  = ENV['BOSH_PIPELINE_BUCKET'] || 'bosh-ci-pipeline'
+    ARTIFACTS_BUCKET = ENV['BOSH_ARTIFACTS_BUCKET'] || 'bosh-jenkins-artifacts'
+    RELEASE_PATCHES_BUCKET = ENV['BOSH_RELEASE_PATCHES_BUCKET'] || 'bosh-jenkins-release-patches'
+    S3_HOST = ENV['BOSH_S3_HOST'] || 's3.amazonaws.com'
+    S3_PROTOCOL = ENV['BOSH_S3_PROTOCOL'] || 'http'
 
     def self.pipeline_uri(remote_directory_path, file_name)
       uri(PIPELINE_BUCKET, remote_directory_path, file_name)
@@ -32,7 +34,7 @@ module Bosh::Dev
       parts << file_name
 
       remote_file_path = parts.join('/')
-      URI.parse("http://#{bucket}.s3.amazonaws.com/#{remote_file_path}")
+      URI.parse("#{S3_PROTOCOL}://#{S3_HOST}/#{bucket}/#{remote_file_path}")
     end
 
     def self.s3_path(bucket, remote_directory_path, file_name)
