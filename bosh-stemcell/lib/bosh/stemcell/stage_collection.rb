@@ -1,20 +1,46 @@
-require 'bosh/stemcell/infrastructure'
-require 'bosh/stemcell/operating_system'
+require 'bosh/stemcell/definition'
+require 'forwardable'
 
 module Bosh::Stemcell
   class StageCollection
+    extend Forwardable
 
-    def initialize(options)
-      @infrastructure   = options.fetch(:infrastructure)
-      @operating_system = options.fetch(:operating_system)
+    def initialize(definition)
+      @definition = definition
+    end
+
+    def all_stages
+      operating_system_stages + agent_stages + infrastructure_stages
+    end
+
+    private
+
+    def_delegators :@definition, :infrastructure, :operating_system, :agent
+
+    def agent_stages
+      case agent
+        when Agent::Go
+          [
+            :bosh_ruby,
+            :bosh_go_agent,
+            :bosh_micro_go,
+            :aws_cli,
+          ]
+        when Agent::Ruby
+          [
+            :bosh_ruby,
+            :bosh_agent,
+            :bosh_micro,
+          ]
+      end
     end
 
     def operating_system_stages
       case operating_system
         when OperatingSystem::Centos then
-          [:base_centos, :base_yum] + hacked_centos_common
+          centos_os_stages + common_os_stages
         when OperatingSystem::Ubuntu then
-          [:base_debootstrap, :base_apt] + common_stages
+          ubuntu_os_stages + common_os_stages
       end
     end
 
@@ -25,67 +51,113 @@ module Bosh::Stemcell
         when Infrastructure::OpenStack then
           openstack_stages
         when Infrastructure::Vsphere then
-          operating_system.instance_of?(OperatingSystem::Centos) ? hacked_centos_vsphere : vsphere_stages
+          vsphere_stages
+        when Infrastructure::Vcloud then
+          vcloud_stages
         when Infrastructure::Warden then
           warden_stages
       end
     end
 
-    private
+    def openstack_stages
+      if operating_system.instance_of?(OperatingSystem::Centos)
+        centos_openstack_stages
+      else
+        default_openstack_stages
+      end
+    end
 
-    attr_reader :infrastructure, :operating_system
+    def vsphere_stages
+      if operating_system.instance_of?(OperatingSystem::Centos)
+        centos_vsphere_stages
+      else
+        default_vsphere_stages
+      end
+    end
 
-    def hacked_centos_common
+    def vcloud_stages
+      if operating_system.instance_of?(OperatingSystem::Centos)
+        centos_vcloud_stages
+      else
+        default_vcloud_stages
+      end
+    end
+
+    def centos_os_stages
+      [:base_centos, :base_yum]
+    end
+
+    def ubuntu_os_stages
+      [
+        :base_debootstrap,
+        :base_apt,
+        :bosh_dpkg_list,
+        :bosh_sysstat,
+        :bosh_sysctl,
+        :system_kernel,
+      ]
+    end
+
+    def common_os_stages
       [
         # Bosh steps
         :bosh_users,
         :bosh_monit,
-        :bosh_ruby,
-        :bosh_agent,
-        #:bosh_sysstat,
-        #:bosh_sysctl,
-        #:bosh_ntpdate,
+        :bosh_ntpdate,
         :bosh_sudoers,
-        # Micro BOSH
-        :bosh_micro,
+        :rsyslog,
         # Install GRUB/kernel/etc
         :system_grub,
-        #:system_kernel,
       ]
     end
 
-    def hacked_centos_vsphere
+    def centos_vsphere_stages
       [
         #:system_open_vm_tools,
+        :system_vsphere_cdrom,
         :system_parameters,
         :bosh_clean,
-        #:bosh_harden,
-        #:bosh_dpkg_list,
+        :bosh_harden,
         :image_create,
         :image_install_grub,
-        :image_vsphere_vmx,
-        :image_vsphere_ovf,
-        :image_vsphere_prepare_stemcell,
+        :image_ovf_vmx,
+        :image_ovf_generate,
+        :image_ovf_prepare_stemcell,
+        :stemcell,
+      ]
+    end
+
+    def centos_vcloud_stages
+      [
+        #:system_open_vm_tools,
+        :system_vsphere_cdrom,
+        :system_parameters,
+        :bosh_clean,
+        :bosh_harden,
+        :image_create,
+        :image_install_grub,
+        :image_ovf_vmx,
+        :image_ovf_generate,
+        :image_ovf_prepare_stemcell,
         :stemcell
       ]
     end
 
-    def common_stages
+    def centos_openstack_stages
       [
-        # Bosh steps
-        :bosh_users,
-        :bosh_monit,
-        :bosh_ruby,
-        :bosh_agent,
-        :bosh_sysstat,
-        :bosh_sysctl,
-        :bosh_ntpdate,
-        :bosh_sudoers,
-        # Micro BOSH
-        :bosh_micro,
-        # Install GRUB/kernel/etc
-        :system_grub,
-        :system_kernel,
+        # Misc
+        :system_openstack_network_centos,
+        :system_parameters,
+        # Finalisation,
+        :bosh_clean,
+        :bosh_harden,
+        :bosh_harden_ssh,
+        :image_create,
+        :image_install_grub,
+        :image_openstack_qcow2,
+        :image_openstack_prepare_stemcell,
+        # Final stemcell
+        :stemcell_openstack,
       ]
     end
 
@@ -93,25 +165,23 @@ module Bosh::Stemcell
       [
         # Misc
         :system_aws_network,
-        :system_aws_clock,
         :system_aws_modules,
         :system_parameters,
         # Finalisation
         :bosh_clean,
         :bosh_harden,
         :bosh_harden_ssh,
-        :bosh_dpkg_list,
         # Image/bootloader
         :image_create,
         :image_install_grub,
         :image_aws_update_grub,
         :image_aws_prepare_stemcell,
         # Final stemcell
-        :stemcell
+        :stemcell,
       ]
     end
 
-    def openstack_stages
+    def default_openstack_stages
       [
         # Misc
         :system_openstack_network,
@@ -122,48 +192,70 @@ module Bosh::Stemcell
         :bosh_clean,
         :bosh_harden,
         :bosh_harden_ssh,
-        :bosh_dpkg_list,
         # Image/bootloader
         :image_create,
         :image_install_grub,
         :image_openstack_qcow2,
         :image_openstack_prepare_stemcell,
         # Final stemcell
-        :stemcell_openstack
+        :stemcell_openstack,
       ]
     end
 
-    def vsphere_stages
+    def default_vsphere_stages
       [
         :system_open_vm_tools,
+        :system_vsphere_cdrom,
         # Misc
         :system_parameters,
         # Finalisation
         :bosh_clean,
         :bosh_harden,
-        :bosh_dpkg_list,
         # Image/bootloader
         :image_create,
         :image_install_grub,
-        :image_vsphere_vmx,
-        :image_vsphere_ovf,
-        :image_vsphere_prepare_stemcell,
+        :image_ovf_vmx,
+        :image_ovf_generate,
+        :image_ovf_prepare_stemcell,
         # Final stemcell
-        :stemcell
+        :stemcell,
       ]
     end
 
-    def warden_stages
+    def default_vcloud_stages
       [
+        :system_open_vm_tools,
+        :system_vsphere_cdrom,
+        # Misc
         :system_parameters,
         # Finalisation
         :bosh_clean,
         :bosh_harden,
-        :bosh_dpkg_list,
-        # Image copy
-        :bosh_copy_root,
+        # Image/bootloader
+        :image_create,
+        :image_install_grub,
+        :image_ovf_vmx,
+        :image_ovf_generate,
+        :image_ovf_prepare_stemcell,
         # Final stemcell
         :stemcell
+      ]
+    end
+    
+    def warden_stages
+      [
+        :system_parameters,
+        :base_warden,
+        # Finalisation
+        :bosh_clean,
+        :bosh_harden,
+	:munin_node,
+        # Image copy
+        :bosh_copy_root,
+        # only used for spec test
+        :image_create,
+        # Final stemcell
+        :stemcell,
       ]
     end
   end
