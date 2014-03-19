@@ -141,6 +141,7 @@ module Bosh::Stemcell
         # Finalisation
         :bosh_clean,
         :bosh_harden,
+	:munin_node,
         :bosh_dpkg_list,
         # Image/bootloader
         :image_create,
