@@ -1,4 +1,4 @@
-# BOSH [![Build Status](https://travis-ci.org/cloudfoundry/bosh.png?branch=master)](https://travis-ci.org/cloudfoundry/bosh) [![Code Climate](https://codeclimate.com/github/cloudfoundry/bosh.png)](https://codeclimate.com/github/cloudfoundry/bosh) [![Dependency Status](https://gemnasium.com/cloudfoundry/bosh.png)](https://gemnasium.com/cloudfoundry/bosh)
+# BOSH [![Build Status](https://travis-ci.org/cloudfoundry/bosh.png?branch=master)](https://travis-ci.org/cloudfoundry/bosh) [![Code Climate](https://codeclimate.com/github/cloudfoundry/bosh.png)](https://codeclimate.com/github/cloudfoundry/bosh)
 
 Cloud Foundry BOSH is an open source tool chain for release engineering,
 deployment and lifecycle management of large scale distributed services.
@@ -13,14 +13,24 @@ and deployment.
 To install the latest bosh CLI gems:
 
 ```
-gem install bosh_cli  --source http://bosh-jenkins-gems.s3.amazonaws.com --pre
+gem install bosh_cli --pre
 
 # Plugin required for deploying MicroBosh
-gem install bosh_cli_plugin_micro --source http://bosh-jenkins-gems.s3.amazonaws.com --pre
+gem install bosh_cli_plugin_micro --pre
 
 # Plugin required for 'bosh aws create' and bootstrap commands
-gem install bosh_cli_plugin_aws --source http://bosh-jenkins-gems.s3.amazonaws.com --pre
+gem install bosh_cli_plugin_aws --pre
 ```
+
+## Using BOSH CLI and plugins from Git
+
+```
+bundle install --binstubs
+export PATH=$(pwd)/bin:$PATH
+which bosh
+```
+
+The `bosh` CLI is now in your `$PATH`, including the `bosh micro` plugin, from the git source; rather than any rubygems you have installed.
 
 # Cloud Foundry Resources
 

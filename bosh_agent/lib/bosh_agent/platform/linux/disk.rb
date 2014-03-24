@@ -22,15 +22,42 @@ module Bosh::Agent
     def mount_persistent_disk(cid, options={})
       FileUtils.mkdir_p(@store_dir)
       disk = lookup_disk_by_cid(cid)
-      partition = "#{disk}1"
-      if File.blockdev?(partition) && !mount_exists?(partition)
-        mounter.mount(partition, @store_dir, options)
+      partition = is_disk_blockdev?? "#{disk}1" : "#{disk}"
+      mount_partition(partition, @store_dir, options)
+    end
+
+    def is_disk_blockdev?
+      case @config.infrastructure_name
+        when "vsphere", "vcloud", "aws", "openstack"
+          true
+        when "warden"
+          false
+        else
+          raise Bosh::Agent::FatalError, "call is_disk_blockdev failed, unsupported infrastructure #{Bosh::Agent::Config.infrastructure_name}"
+      end
+    end
+
+    def mount_partition(partition, mount_point, options={})
+      infra_option = {}
+      case @config.infrastructure_name
+        when "vsphere", "vcloud", "aws", "openstack"
+          nil
+        when "warden"
+          infra_option = { bind_mount: true }
+        else
+          raise Bosh::Agent::FatalError, "call is_disk_blockdev failed, unsupported infrastructure #{Bosh::Agent::Config.infrastructure_name}"
+      end
+
+      proceed_mount = is_disk_blockdev?? File.blockdev?(partition) : true
+
+      if proceed_mount && !mount_exists?(partition)
+        mounter.mount(partition, mount_point, options.merge(infra_option))
       end
     end
 
     def get_data_disk_device_name
       case @config.infrastructure_name
-        when "vsphere"
+        when "vsphere", "vcloud"
           VSPHERE_DATA_DISK
         when "aws", "openstack"
           settings = @config.settings
@@ -56,7 +83,7 @@ module Bosh::Agent
       end
 
       case @config.infrastructure_name
-        when "vsphere"
+        when "vsphere", "vcloud"
           # VSphere passes in scsi disk id
           get_available_scsi_path(disk_id)
         when "aws", "openstack"
@@ -117,7 +144,7 @@ module Bosh::Agent
     end
 
     def mount_exists?(partition)
-      File.read('/proc/mounts').lines.select { |l| l.match(/#{partition}/) }.first
+      `mount`.lines.select { |l| l.match(/#{partition}/) }.first
     end
 
     private

@@ -22,11 +22,6 @@ module Bosh::Cli
         @args = []
       end
 
-      # @return [Bosh::Cli::Cache] Current CLI cache
-      def cache
-        Config.cache
-      end
-
       # @return [Bosh::Cli::Config] Current configuration
       def config
         @config ||= begin
@@ -65,7 +60,7 @@ module Bosh::Cli
       end
 
       def logged_in?
-        username && password
+        !!(username && password)
       end
 
       def non_interactive?

@@ -42,7 +42,7 @@ module Bosh::WardenCloud
       DEFAULT_SETTINGS_FILE
     end
 
-    def generate_agent_env(vm_id, agent_id, networks)
+    def generate_agent_env(vm_id, agent_id, networks, environment)
       vm_env = {
           'name' => vm_id,
           'id' => vm_id
@@ -54,6 +54,7 @@ module Bosh::WardenCloud
           'networks' => networks,
           'disks' => { 'persistent' => {} },
       }
+      env['env'] = environment if environment
       env.merge!(@agent_properties)
       env
     end
@@ -71,10 +72,10 @@ module Bosh::WardenCloud
     end
 
     def set_agent_env(handle, env)
-      tempfile = Tempfile.new('settings')
+      tempfile = File.new("/tmp/agent-setting-#{Time.now.to_f}-#{Kernel.rand(100_000)}",'w')
       tempfile.write(Yajl::Encoder.encode(env))
-      tempfile.close
       tempfile_in = "/tmp/#{Kernel.rand(100_000)}"
+      tempfile.close
       # Here we copy the setting file to temp file in container, then mv it to
       # /var/vcap/bosh by privileged user.
       with_warden do |client|
@@ -90,7 +91,6 @@ module Bosh::WardenCloud
         request.script = "mv #{tempfile_in} #{agent_settings_file}"
         client.call(request)
       end
-      tempfile.unlink
     end
 
     def start_agent(handle)

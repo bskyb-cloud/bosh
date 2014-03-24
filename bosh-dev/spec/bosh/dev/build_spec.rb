@@ -36,7 +36,7 @@ module Bosh::Dev
 
       context 'when CANDIDATE_BUILD_NUMBER is not set' do
         it { should be_a(Build::Local) }
-        its(:number) { should eq('local') }
+        its(:number) { should eq('0000') }
 
         it 'uses LocalDownloadAdapater as download adapter' do
           download_adapter = instance_double('Bosh::Dev::LocalDownloadAdapter')
@@ -48,7 +48,7 @@ module Bosh::Dev
           build = instance_double('Bosh::Dev::Build::Local')
           Bosh::Dev::Build::Local
             .should_receive(:new)
-            .with('local', download_adapter)
+            .with('0000', download_adapter)
             .and_return(build)
 
           subject.should == build
@@ -66,11 +66,8 @@ module Bosh::Dev
       )
     end
 
-    before { Bosh::Dev::UploadAdapter.stub(:new).and_return(upload_adapter) }
-    let(:upload_adapter) { instance_double('Bosh::Dev::UploadAdapter') }
-
     subject(:build) { Build::Candidate.new('123', download_adapter) }
-    let(:download_adapter) { instance_double('Bosh::Dev::DownloadAdapter', download: nil) }
+    let(:download_adapter) { instance_double('Bosh::Dev::DownloadAdapter') }
 
     before(:all) { Fog.mock! }
     after(:all) { Fog.unmock! }
@@ -85,13 +82,26 @@ module Bosh::Dev
       })
     end
 
-    describe '#upload' do
-      let(:release) { double(tarball: 'release-tarball.tgz') }
-      let(:io) { double }
+    describe '#upload_release' do
+      let(:release) do
+        instance_double(
+          'Bosh::Dev::BoshRelease',
+          final_tarball_path: 'fake-release-tarball-path',
+        )
+      end
+
+      before { Bosh::Dev::UploadAdapter.stub(:new).and_return(upload_adapter) }
+      let(:upload_adapter) { instance_double('Bosh::Dev::UploadAdapter', upload: nil) }
 
       it 'uploads the release with its build number' do
-        File.stub(:open).with(release.tarball) { io }
-        upload_adapter.should_receive(:upload).with(bucket_name: 'bosh-ci-pipeline', key: '123/release/bosh-123.tgz', body: io, public: true)
+        io = double('io')
+        File.stub(:open).with('fake-release-tarball-path') { io }
+        upload_adapter.should_receive(:upload).with(
+          bucket_name: 'bosh-ci-pipeline',
+          key: '123/release/bosh-123.tgz',
+          body: io,
+          public: true,
+        )
         subject.upload_release(release)
       end
 
@@ -108,6 +118,9 @@ module Bosh::Dev
       let(:files) { %w(foo/bar.txt foo/bar/baz.txt) }
       let(:logger) { instance_double('Logger').as_null_object }
 
+      before { Bosh::Dev::UploadAdapter.stub(:new).and_return(upload_adapter) }
+      let(:upload_adapter) { instance_double('Bosh::Dev::UploadAdapter') }
+
       before do
         FileUtils.mkdir_p(src)
         Dir.chdir(src) do
@@ -120,12 +133,12 @@ module Bosh::Dev
       end
 
       it 'recursively uploads a directory into base_dir' do
-        upload_adapter.should_receive(:upload).with do |options|
+        upload_adapter.should_receive(:upload) do |options|
           key = options.fetch(:key)
           body = options.fetch(:body)
           public = options.fetch(:public)
 
-          expect(public).to eq(true)
+          expect(public).to be(true)
 
           case key
             when '123/dest_dir/foo/bar.txt'
@@ -144,114 +157,39 @@ module Bosh::Dev
     describe '#promote_artifacts' do
       let(:stemcell) { instance_double('Bosh::Stemcell::Archive', ami_id: 'ami-ID') }
 
+      let(:promotable_artifacts) do
+        instance_double('Bosh::Dev::PromotableArtifacts', all: [
+          instance_double('Bosh::Dev::GemArtifact', promote: nil),
+          instance_double('Bosh::Dev::PromotableArtifact', promote: nil),
+          instance_double('Bosh::Dev::LightStemcellPointer', promote: nil),
+        ])
+      end
+
       before do
-        Bosh::Dev::UploadAdapter.unstub!(:new)
         Rake::FileUtilsExt.stub(:sh)
         Bosh::Stemcell::Archive.stub(new: stemcell)
+        PromotableArtifacts.stub(new: promotable_artifacts)
       end
 
-      it 'syncs the pipeline gems' do
-        Rake::FileUtilsExt.should_receive(:sh).
-          with('s3cmd --verbose sync s3://bosh-ci-pipeline/123/gems/ s3://bosh-jenkins-gems')
+      it 'promotes all PromotableArtifacts' do
+        promotable_artifacts.all.each do |artifact|
+          artifact.should_receive(:promote)
+        end
 
         subject.promote_artifacts
-      end
-
-      it 'syncs the releases' do
-        Rake::FileUtilsExt.should_receive(:sh).
-          with('s3cmd --verbose cp s3://bosh-ci-pipeline/123/release/bosh-123.tgz s3://bosh-jenkins-artifacts/release/bosh-123.tgz')
-
-        subject.promote_artifacts
-      end
-
-      it 'syncs the bosh stemcells' do
-        Rake::FileUtilsExt.should_receive(:sh).
-          with('s3cmd --verbose cp s3://bosh-ci-pipeline/123/bosh-stemcell/aws/bosh-stemcell-123-aws-xen-ubuntu.tgz s3://bosh-jenkins-artifacts/bosh-stemcell/aws/bosh-stemcell-123-aws-xen-ubuntu.tgz')
-        Rake::FileUtilsExt.should_receive(:sh).
-          with('s3cmd --verbose cp s3://bosh-ci-pipeline/123/bosh-stemcell/aws/light-bosh-stemcell-123-aws-xen-ubuntu.tgz s3://bosh-jenkins-artifacts/bosh-stemcell/aws/light-bosh-stemcell-123-aws-xen-ubuntu.tgz')
-        Rake::FileUtilsExt.should_receive(:sh).
-          with('s3cmd --verbose cp s3://bosh-ci-pipeline/123/bosh-stemcell/openstack/bosh-stemcell-123-openstack-kvm-ubuntu.tgz s3://bosh-jenkins-artifacts/bosh-stemcell/openstack/bosh-stemcell-123-openstack-kvm-ubuntu.tgz')
-        Rake::FileUtilsExt.should_receive(:sh).
-          with('s3cmd --verbose cp s3://bosh-ci-pipeline/123/bosh-stemcell/vsphere/bosh-stemcell-123-vsphere-esxi-ubuntu.tgz s3://bosh-jenkins-artifacts/bosh-stemcell/vsphere/bosh-stemcell-123-vsphere-esxi-ubuntu.tgz')
-
-        subject.promote_artifacts
-      end
-
-      it 'syncs the latest bosh stemcells' do
-        Rake::FileUtilsExt.should_receive(:sh).
-          with('s3cmd --verbose cp s3://bosh-ci-pipeline/123/bosh-stemcell/aws/bosh-stemcell-latest-aws-xen-ubuntu.tgz s3://bosh-jenkins-artifacts/bosh-stemcell/aws/bosh-stemcell-latest-aws-xen-ubuntu.tgz')
-        Rake::FileUtilsExt.should_receive(:sh).
-          with('s3cmd --verbose cp s3://bosh-ci-pipeline/123/bosh-stemcell/aws/light-bosh-stemcell-latest-aws-xen-ubuntu.tgz s3://bosh-jenkins-artifacts/bosh-stemcell/aws/light-bosh-stemcell-latest-aws-xen-ubuntu.tgz')
-        Rake::FileUtilsExt.should_receive(:sh).
-          with('s3cmd --verbose cp s3://bosh-ci-pipeline/123/bosh-stemcell/openstack/bosh-stemcell-latest-openstack-kvm-ubuntu.tgz s3://bosh-jenkins-artifacts/bosh-stemcell/openstack/bosh-stemcell-latest-openstack-kvm-ubuntu.tgz')
-        Rake::FileUtilsExt.should_receive(:sh).
-          with('s3cmd --verbose cp s3://bosh-ci-pipeline/123/bosh-stemcell/vsphere/bosh-stemcell-latest-vsphere-esxi-ubuntu.tgz s3://bosh-jenkins-artifacts/bosh-stemcell/vsphere/bosh-stemcell-latest-vsphere-esxi-ubuntu.tgz')
-
-        subject.promote_artifacts
-      end
-
-      describe 'update light bosh ami pointer file' do
-        let(:fake_stemcell_filename) { 'FAKE_STEMCELL_FILENAME' }
-        let(:fake_stemcell) { instance_double('Bosh::Stemcell::Archive') }
-        let(:infrastructure) { instance_double('Bosh::Stemcell::Infrastructure::Base', name: 'aws', light?: true) }
-        let(:operating_system) { instance_double('Bosh::Stemcell::OperatingSystem::Ubuntu') }
-        let(:archive_filename) { instance_double('Bosh::Stemcell::ArchiveFilename', to_s: fake_stemcell_filename) }
-        let(:bucket_files) { fog_storage.directories.get('bosh-jenkins-artifacts').files }
-
-        before do
-          Bosh::Stemcell::Infrastructure.stub(:for).and_return(instance_double('Bosh::Stemcell::Infrastructure::Base', name: 'name', light?: false))
-          Bosh::Stemcell::Infrastructure.stub(:for).with('aws').and_return(infrastructure)
-
-          Bosh::Stemcell::OperatingSystem.stub(:for).and_return(instance_double('Bosh::Stemcell::OperatingSystem::Base', name: 'name'))
-          Bosh::Stemcell::OperatingSystem.stub(:for).with('ubuntu').and_return(operating_system)
-
-          Bosh::Stemcell::ArchiveFilename.stub(:new).and_return(archive_filename)
-
-          fake_stemcell.stub(ami_id: 'FAKE_AMI_ID')
-          Bosh::Stemcell::Archive.stub(new: fake_stemcell)
-
-          stub_request(:get, 'http://bosh-ci-pipeline.s3.amazonaws.com/123/bosh-stemcell/aws/FAKE_STEMCELL_FILENAME')
-        end
-
-        it 'downloads the aws bosh-stemcell for the current build' do
-          subject.should_receive(:download_stemcell).with(
-            'bosh-stemcell', infrastructure, operating_system, true, Dir.pwd)
-          subject.promote_artifacts
-        end
-
-        it 'initializes a Stemcell with the downloaded stemcell filename' do
-          Bosh::Stemcell::ArchiveFilename.should_receive(:new).with(
-            '123', infrastructure, operating_system, 'bosh-stemcell', true).and_return(archive_filename)
-          Bosh::Stemcell::Archive.should_receive(:new).with(fake_stemcell_filename)
-          subject.promote_artifacts
-        end
-
-        it 'updates the S3 object with the AMI ID from the stemcell.MF' do
-          fake_stemcell.stub(ami_id: 'FAKE_AMI_ID')
-
-          subject.promote_artifacts
-
-          expect(bucket_files.get('last_successful-bosh-stemcell-aws_ami_us-east-1').body).to eq('FAKE_AMI_ID')
-        end
-
-        it 'is publicly reachable' do
-          subject.promote_artifacts
-
-          expect(bucket_files.get('last_successful-bosh-stemcell-aws_ami_us-east-1').public_url).to_not be_nil
-        end
       end
     end
 
     describe '#upload_stemcell' do
       let(:logger) { instance_double('Logger').as_null_object }
       let(:bucket_files) { fog_storage.directories.get('bosh-ci-pipeline').files }
+      let(:upload_adapter) { instance_double('Bosh::Dev::UploadAdapter', upload: nil) }
 
       before do
-        Bosh::Dev::UploadAdapter.unstub!(:new)
-
         FileUtils.mkdir('/tmp')
         File.open(stemcell.path, 'w') { |f| f.write(stemcell_contents) }
         Logger.stub(new: logger)
+        Bosh::Dev::UploadAdapter.stub(:new).and_return(upload_adapter)
       end
 
       describe 'when publishing a full stemcell' do
@@ -266,20 +204,23 @@ module Bosh::Dev
         end
         let(:stemcell_contents) { 'contents of the stemcells' }
 
-        it 'publishes a stemcell to an S3 bucket' do
+        it 'uses the upload adapter to upload the numbered and latest stemcell to s3' do
           key = '123/bosh-stemcell/vsphere/bosh-stemcell-123-vsphere-esxi-ubuntu.tgz'
-          logger.should_receive(:info).with("uploaded to s3://bosh-ci-pipeline/#{key}")
-          build.upload_stemcell(stemcell)
-          expect(bucket_files.map(&:key)).to include(key)
-          expect(bucket_files.get(key).body).to eq('contents of the stemcells')
-        end
+          latest_key = '123/bosh-stemcell/vsphere/bosh-stemcell-latest-vsphere-esxi-ubuntu.tgz'
 
-        it 'updates the latest stemcell in the S3 bucket' do
-          key = '123/bosh-stemcell/vsphere/bosh-stemcell-latest-vsphere-esxi-ubuntu.tgz'
           logger.should_receive(:info).with("uploaded to s3://bosh-ci-pipeline/#{key}")
+
+          upload_adapter.should_receive(:upload).with(bucket_name: 'bosh-ci-pipeline',
+                                                      key: key,
+                                                      body: anything,
+                                                      public: true)
+
+          upload_adapter.should_receive(:upload).with(bucket_name: 'bosh-ci-pipeline',
+                                                      key: latest_key,
+                                                      body: anything,
+                                                      public: true)
+
           build.upload_stemcell(stemcell)
-          expect(bucket_files.map(&:key)).to include(key)
-          expect(bucket_files.get(key).body).to eq('contents of the stemcells')
         end
       end
 
@@ -298,86 +239,102 @@ module Bosh::Dev
 
         it 'publishes a light stemcell to S3 bucket' do
           key = '123/bosh-stemcell/vsphere/light-bosh-stemcell-123-vsphere-esxi-ubuntu.tgz'
-          logger.should_receive(:info).with("uploaded to s3://bosh-ci-pipeline/#{key}")
-          build.upload_stemcell(stemcell)
-          expect(bucket_files.map(&:key)).to include(key)
-          expect(bucket_files.get(key).body).to eq('this file is a light stemcell')
-        end
+          latest_key = '123/bosh-stemcell/vsphere/light-bosh-stemcell-latest-vsphere-esxi-ubuntu.tgz'
 
-        it 'updates the latest light stemcell in the s3 bucket' do
-          key = '123/bosh-stemcell/vsphere/light-bosh-stemcell-latest-vsphere-esxi-ubuntu.tgz'
           logger.should_receive(:info).with("uploaded to s3://bosh-ci-pipeline/#{key}")
+
+          upload_adapter.should_receive(:upload).with(bucket_name: 'bosh-ci-pipeline',
+                                                      key: key,
+                                                      body: anything,
+                                                      public: true)
+
+          upload_adapter.should_receive(:upload).with(bucket_name: 'bosh-ci-pipeline',
+                                                      key: latest_key,
+                                                      body: anything,
+                                                      public: true)
+
           build.upload_stemcell(stemcell)
-          expect(bucket_files.map(&:key)).to include(key)
-          expect(bucket_files.get(key).body).to eq('this file is a light stemcell')
         end
       end
     end
 
     describe '#download_stemcell' do
       def perform(light = false)
-        build.download_stemcell('stemcell-name', infrastructure, operating_system, light, Dir.pwd)
+        build.download_stemcell('stemcell-name', definition, light, Dir.pwd)
       end
 
-      let(:infrastructure)   { instance_double('Bosh::Stemcell::Infrastructure::Base', name: 'infrastructure-name', hypervisor: 'infrastructure-hypervisor') }
-      let(:operating_system) { instance_double('Bosh::Stemcell::OperatingSystem::Base', name: 'operating-system-name') }
+      let(:archive_filename) { instance_double('Bosh::Stemcell::ArchiveFilename', to_s: 'fake-filename') }
 
-      expected_s3_bucket     = 'http://bosh-ci-pipeline.s3.amazonaws.com'
-      expected_s3_folder     = '/123/stemcell-name/infrastructure-name'
-      expected_stemcell_name = 'stemcell-name-123-infrastructure-name-infrastructure-hypervisor-operating-system-name.tgz'
+      before do
+        allow(Bosh::Stemcell::ArchiveFilename).to receive(:new).and_return(archive_filename)
+      end
+
+      let(:infrastructure) { instance_double('Bosh::Stemcell::Infrastructure::Base', name: 'infrastructure-name') }
+      let(:definition) { instance_double('Bosh::Stemcell::Definition', infrastructure: infrastructure) }
+
+      let(:expected_s3_bucket) { 'http://bosh-ci-pipeline.s3.amazonaws.com' }
+      let(:expected_s3_folder) { '/123/stemcell-name/infrastructure-name' }
 
       it 'downloads the specified non-light stemcell version from the pipeline bucket' do
-        expected_uri = URI("#{expected_s3_bucket}#{expected_s3_folder}/#{expected_stemcell_name}")
-        download_adapter.should_receive(:download).with(expected_uri, "/#{expected_stemcell_name}")
+        expected_uri = URI("#{expected_s3_bucket}#{expected_s3_folder}/#{archive_filename}")
+        download_adapter.should_receive(:download).with(expected_uri, "/#{archive_filename}")
         perform
+
+        expect(Bosh::Stemcell::ArchiveFilename).to have_received(:new).with('123', definition, 'stemcell-name', false)
       end
 
       it 'downloads the specified light stemcell version from the pipeline bucket' do
-        expected_uri = URI("#{expected_s3_bucket}#{expected_s3_folder}/light-#{expected_stemcell_name}")
-        download_adapter.should_receive(:download).with(expected_uri, "/light-#{expected_stemcell_name}")
+        expected_uri = URI("#{expected_s3_bucket}#{expected_s3_folder}/#{archive_filename}")
+        download_adapter.should_receive(:download).with(expected_uri, "/#{archive_filename}")
         perform(true)
+
+        expect(Bosh::Stemcell::ArchiveFilename).to have_received(:new).with('123', definition, 'stemcell-name', true)
       end
 
       it 'returns the name of the downloaded file' do
         download_adapter.should_receive(:download)
-        perform.should eq(expected_stemcell_name)
-      end
-
-      it 'propagates downloading error when remote file does not exist' do
-        error = RuntimeError.new('error-message')
-        download_adapter.stub(:download).and_raise(error)
-        expect { perform }.to raise_error(error)
+        perform.should eq(archive_filename.to_s)
       end
     end
 
     describe '#bosh_stemcell_path' do
+
+      let(:archive_filename) { instance_double('Bosh::Stemcell::ArchiveFilename', to_s: 'fake-filename') }
+
+      before do
+        allow(Bosh::Stemcell::ArchiveFilename).to receive(:new).and_return(archive_filename)
+      end
+
       let(:infrastructure) do
         instance_double(
           'Bosh::Stemcell::Infrastructure::Base',
-          name: 'infrastructure-name',
-          hypervisor: 'infrastructure-hypervisor',
           light?: true,
         )
       end
 
-      let(:operating_system) { instance_double('Bosh::Stemcell::OperatingSystem::Base', name: 'operating-system-name') }
+      let(:definition) {
+        instance_double(
+          'Bosh::Stemcell::Definition',
+          infrastructure: infrastructure,
+        )
+      }
 
-      it 'works' do
-        download_directory     = '/FAKE/CUSTOM/WORK/DIRECTORY'
-        bosh_stemcell_path     = subject.bosh_stemcell_path(infrastructure, operating_system, download_directory)
-        expected_stemcell_name = 'light-bosh-stemcell-123-infrastructure-name-infrastructure-hypervisor-operating-system-name.tgz'
-        expect(bosh_stemcell_path).to eq(File.join(download_directory, expected_stemcell_name))
+      it 'returns the bosh stemcell path for given definition' do
+        download_directory = '/FAKE/CUSTOM/WORK/DIRECTORY'
+        bosh_stemcell_path = subject.bosh_stemcell_path(definition, download_directory)
+        expect(bosh_stemcell_path).to eq(File.join(download_directory, archive_filename.to_s))
+        expect(Bosh::Stemcell::ArchiveFilename).to have_received(:new).with('123', definition, 'bosh-stemcell', true)
       end
     end
   end
 
   describe Build::Candidate do
     subject(:build) { Build::Candidate.new('123', download_adapter) }
-    let(:download_adapter) { instance_double('Bosh::Dev::DownloadAdapter', download: nil) }
+    let(:download_adapter) { instance_double('Bosh::Dev::DownloadAdapter') }
 
     describe '#release_tarball_path' do
       context 'when remote file does not exist' do
-        it 'raises' do
+        it 'raises an exception' do
           error = Exception.new('error-message')
           download_adapter.stub(:download).and_raise(error)
           expect { build.release_tarball_path }.to raise_error(error)
@@ -385,57 +342,106 @@ module Bosh::Dev
       end
 
       it 'downloads the specified release from the pipeline bucket' do
-        download_adapter.should_receive(:download).with(
-          URI('http://bosh-ci-pipeline.s3.amazonaws.com/123/release/bosh-123.tgz'), 'tmp/bosh-123.tgz')
+        uri = URI('http://bosh-ci-pipeline.s3.amazonaws.com/123/release/bosh-123.tgz')
+        download_adapter.should_receive(:download).with(uri, 'tmp/bosh-123.tgz')
         build.release_tarball_path
       end
 
       it 'returns the relative path of the downloaded release' do
-        download_adapter.should_receive(:download).with(
-          URI('http://bosh-ci-pipeline.s3.amazonaws.com/123/release/bosh-123.tgz'), 'tmp/bosh-123.tgz')
-        expect(build.release_tarball_path).to eq 'tmp/bosh-123.tgz'
+        uri = URI('http://bosh-ci-pipeline.s3.amazonaws.com/123/release/bosh-123.tgz')
+        download_adapter.should_receive(:download).with(uri, 'tmp/bosh-123.tgz')
+        expect(build.release_tarball_path).to eq('tmp/bosh-123.tgz')
+      end
+    end
+
+    describe '#light_stemcell' do
+      let(:archive_filename) {
+        instance_double('Bosh::Stemcell::ArchiveFilename', to_s: 'fake-filename')
+      }
+
+      let(:archive) {
+        instance_double('Bosh::Stemcell::Archive')
+      }
+
+      before do
+        allow(Bosh::Stemcell::ArchiveFilename).to receive(:new).and_return(archive_filename)
+        allow(UriProvider).to receive(:pipeline_uri).and_return('fake-url')
+        allow(Dir).to receive(:pwd).and_return('current-dir')
+        allow(download_adapter).to receive(:download)
+        allow(Bosh::Stemcell::Archive).to receive(:new).and_return(archive)
+      end
+
+      it 'fetches the light stemcell for aws + ubuntu + ruby agent' do
+        subject.light_stemcell
+
+        expect(UriProvider).to have_received(:pipeline_uri).with('123/bosh-stemcell/aws', 'fake-filename')
+        expect(download_adapter).to have_received(:download).with('fake-url', 'current-dir/fake-filename')
+      end
+
+      it 'returns the path to a light stemcell' do
+        actual_archive = subject.light_stemcell
+        expect(actual_archive).to eq archive
       end
     end
   end
 
   describe Build::Local do
     subject { described_class.new('build-number', download_adapter) }
-    let(:download_adapter) { instance_double('Bosh::Dev::DownloadAdapter', download: nil) }
+    let(:download_adapter) { instance_double('Bosh::Dev::DownloadAdapter') }
 
     before(:all) { Fog.mock! }
-    after(:all)  { Fog.unmock! }
+    after(:all) { Fog.unmock! }
 
     describe '#release_tarball_path' do
-      it 'returns the path to new microbosh release' do
-        micro_bosh_release = instance_double('Bosh::Dev::MicroBoshRelease', tarball: 'tarball-path')
-        Bosh::Dev::MicroBoshRelease.stub(new: micro_bosh_release)
-        expect(subject.release_tarball_path).to eq('tarball-path')
+      let(:dev_bosh_release) { instance_double('Bosh::Dev::BoshRelease') }
+      before { Bosh::Dev::BoshRelease.stub(build: dev_bosh_release) }
+
+      let(:gem_components) { instance_double('Bosh::Dev::GemComponents') }
+      before { allow(GemComponents).to receive(:new).with('build-number').and_return(gem_components) }
+
+      it 'builds gems before creating release because the latter depends on the presence of release gems' do
+        expect(gem_components).to receive(:build_release_gems).ordered
+        expect(dev_bosh_release).to receive(:dev_tarball_path).ordered
+
+        subject.release_tarball_path
+      end
+
+      it 'returns the path to new dev bosh release' do
+        allow(dev_bosh_release).to receive(:dev_tarball_path).and_return('fake-dev-tarball-path')
+        allow(gem_components).to receive(:build_release_gems)
+
+        expect(subject.release_tarball_path).to eq('fake-dev-tarball-path')
       end
     end
 
     describe '#download_stemcell' do
       def perform
-        subject.download_stemcell('stemcell-name', infrastructure, operating_system, false, '/output-directory')
+        subject.download_stemcell('stemcell-name', definition, false, '/output-directory')
       end
 
-      let(:infrastructure) do
+      let(:archive_filename) {
+        instance_double('Bosh::Stemcell::ArchiveFilename', to_s: 'fake-filename')
+      }
+
+      let(:definition) {
         instance_double(
-          'Bosh::Stemcell::Infrastructure::Base',
-          name: 'infrastructure-name',
-          hypervisor: 'infrastructure-hypervisor',
-          light?: true,
+          'Bosh::Stemcell::Definition',
         )
-      end
+      }
 
-      let(:operating_system) { instance_double('Bosh::Stemcell::OperatingSystem::Base', name: 'operating-system-name') }
+      before do
+        allow(Bosh::Stemcell::ArchiveFilename).to receive(:new).and_return(archive_filename)
+      end
 
       context 'when downloading does not result in an error' do
         it 'uses download adapter to move stemcell to given location' do
-          expected_stemcell_name = 'stemcell-name-build-number-infrastructure-name-infrastructure-hypervisor-operating-system-name.tgz'
           download_adapter
             .should_receive(:download)
-            .with("tmp/#{expected_stemcell_name}", "/output-directory/#{expected_stemcell_name}")
-          perform
+            .with("tmp/#{archive_filename}", "/output-directory/#{archive_filename}")
+          filename = perform
+
+          expect(filename).to eq(archive_filename.to_s)
+          expect(Bosh::Stemcell::ArchiveFilename).to have_received(:new).with('build-number', definition, 'stemcell-name', false)
         end
       end
 

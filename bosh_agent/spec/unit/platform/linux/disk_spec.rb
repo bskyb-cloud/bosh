@@ -21,68 +21,74 @@ describe Bosh::Agent::Platform::Linux::Disk do
   before { stub_const('Bosh::Agent::Platform::Linux::Disk::DISK_RETRY_MAX_DEFAULT', 2) }
   before { Bosh::Agent::Mounter.stub(:new).and_return(mounter) }
 
-  context 'vSphere' do
-    let(:settings) { { 'disks' => { 'persistent' => { 2 => '333' } } } }
-    let(:infrastructure_name) { 'vsphere' }
+  ['vsphere', 'vcloud'].each do |infra|
+    context infra do
+      let(:settings) { { 'disks' => { 'persistent' => { 2 => '333' } } } }
+      let(:infrastructure_name) { infra }
 
-    before { disk_manager.stub(:sh).with('rescan-scsi-bus.sh') }
+      before { disk_manager.stub(:sh).with('rescan-scsi-bus.sh') }
 
-    it 'looks up disk by cid' do
-      Dir.should_receive(:glob).with(dev_path, 0).and_return(['/dev/sdy'])
-      disk_manager.lookup_disk_by_cid(2).should eq '/dev/sdy'
-    end
+      it 'looks up disk by cid' do
+        Dir.should_receive(:glob).with(dev_path, 0).and_return(['/dev/sdy'])
+        disk_manager.lookup_disk_by_cid(2).should eq '/dev/sdy'
+      end
 
-    it 'retries disk lookup by cid' do
-      Dir.should_receive(:glob).with(dev_path, 0).exactly(2).and_return([])
-      expect {
-        disk_manager.lookup_disk_by_cid(2)
-      }.to raise_error(Bosh::Agent::DiskNotFoundError)
-    end
-
-    it 'gets data disk device name' do
-      disk_manager.get_data_disk_device_name.should eq '/dev/sdb'
-    end
-
-    context 'if persistent disk cid is unknown' do
-      let(:settings) { { 'disks' => { 'persistent' => { 199 => 2 } } } }
-
-      it 'raises an exception' do
+      it 'retries disk lookup by cid' do
+        Dir.should_receive(:glob).with(dev_path, 0).exactly(2).and_return([])
         expect {
-          disk_manager.lookup_disk_by_cid(200)
-        }.to raise_error(Bosh::Agent::FatalError, /Unknown persistent disk/)
-      end
-    end
-
-    context 'when disk is a block device' do
-      before do
-        Dir.stub(:glob).with(dev_path, 0).and_return(%w(/dev/sdy))
-        File.stub(:blockdev?).with('/dev/sdy1').and_return(true)
-        File.stub(:read).with('/proc/mounts').and_return('', '/dev/sdy1')
+          disk_manager.lookup_disk_by_cid(2)
+        }.to raise_error(Bosh::Agent::DiskNotFoundError)
       end
 
-      it 'mounts persistent disk to store_dir if not already mounted' do
-        mounter.should_receive(:mount).with('/dev/sdy1', store_path, {})
-
-        disk_manager.mount_persistent_disk(2)
+      it 'gets data disk device name' do
+        disk_manager.get_data_disk_device_name.should eq '/dev/sdb'
       end
 
-      it 'mounts persistent disk only once' do
-        mounter.should_receive(:mount).with('/dev/sdy1', store_path, {}).once
+      context 'if persistent disk cid is unknown' do
+        let(:settings) { { 'disks' => { 'persistent' => { 199 => 2 } } } }
 
-        disk_manager.mount_persistent_disk(2)
-        disk_manager.mount_persistent_disk(2)
+        it 'raises an exception' do
+          expect {
+            disk_manager.lookup_disk_by_cid(200)
+          }.to raise_error(Bosh::Agent::FatalError, /Unknown persistent disk/)
+        end
       end
-    end
 
-    context 'when disk is not a block device' do
-      it 'does not mount' do
-        Dir.stub(:glob).with(dev_path, 0).and_return(%w(/dev/sdy))
-        File.stub(:blockdev?).with('/dev/sdy1').and_return(false)
+      context 'when disk is a block device' do
+        before do
+          Dir.stub(:glob).with(dev_path, 0).and_return(%w(/dev/sdy))
+          File.stub(:blockdev?).with('/dev/sdy1').and_return(true)
+        end
 
-        mounter.should_not_receive(:mount)
+        it 'mounts persistent disk to store_dir if not already mounted' do
+          mounter.should_receive(:mount).with('/dev/sdy1', store_path, {})
 
-        disk_manager.mount_persistent_disk(2)
+          disk_manager.mount_persistent_disk(2)
+        end
+
+        it 'mounts persistent disk only once' do
+          mounter.should_receive(:mount).with('/dev/sdy1', store_path, {}).once
+          disk_manager.should_receive(:mount_exists?).with('/dev/sdy1').and_return(false, true)
+          disk_manager.mount_persistent_disk(2)
+          disk_manager.mount_persistent_disk(2)
+        end
       end
+
+      context 'when disk is not a block device' do
+        it 'does not mount' do
+          Dir.stub(:glob).with(dev_path, 0).and_return(%w(/dev/sdy))
+          File.stub(:blockdev?).with('/dev/sdy1').and_return(false)
+
+          mounter.should_not_receive(:mount)
+
+          disk_manager.mount_persistent_disk(2)
+        end
+      end
+
+      it 'persistent disk is_disk_blockdev' do
+        expect(disk_manager.is_disk_blockdev?).to be true
+      end
+
     end
   end
 
@@ -112,6 +118,11 @@ describe Bosh::Agent::Platform::Linux::Disk do
       Dir.should_receive(:glob).with(%w(/dev/sdf /dev/vdf /dev/xvdf)).twice.and_return(%w(/dev/xvdf))
       expect(disk_manager.lookup_disk_by_cid(2)).to eq '/dev/xvdf'
     end
+
+    it 'persistent disk is_disk_blockdev' do
+      expect(disk_manager.is_disk_blockdev?).to be true
+    end
+
   end
 
   context 'OpenStack' do
@@ -137,5 +148,35 @@ describe Bosh::Agent::Platform::Linux::Disk do
       Dir.should_receive(:glob).with(%w(/dev/sdf /dev/vdf /dev/xvdf)).twice.and_return(%w(/dev/vdf))
       expect(disk_manager.lookup_disk_by_cid(2)).to eq '/dev/vdf'
     end
+
+    it 'persistent disk is_disk_blockdev' do
+      expect(disk_manager.is_disk_blockdev?).to be true
+    end
+
+  end
+
+  context 'Warden' do
+    let(:settings) { { 'disks' => { 'persistent'=> { 'disk-1111' => '/warden-cpi-dev/disk-1111'} } } }
+    let(:infrastructure_name) { 'warden' }
+
+     it 'looks up disks by cid' do
+       disk_manager.lookup_disk_by_cid('disk-1111').should eq '/warden-cpi-dev/disk-1111'
+     end
+
+    it 'persistent disk is_NOT_disk_blockdev' do
+      expect(disk_manager.is_disk_blockdev?).to be false
+    end
+
+   it 'does not get data disk device name' do
+      disk_manager.get_data_disk_device_name.should eq '/dev/invalid'
+   end
+
+    it 'mounts persistent disk with bind mount only once' do
+      mounter.should_receive(:mount).with('/warden-cpi-dev/disk-1111', store_path, { bind_mount: true }).once
+      disk_manager.should_receive(:mount_exists?).with('/warden-cpi-dev/disk-1111').and_return(false, true)
+      disk_manager.mount_persistent_disk('disk-1111')
+      disk_manager.mount_persistent_disk('disk-1111')
+    end
+
   end
 end

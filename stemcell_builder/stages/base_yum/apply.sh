@@ -5,7 +5,6 @@ set -e
 base_dir=$(readlink -nf $(dirname $0)/../..)
 source $base_dir/lib/prelude_apply.bash
 
-
 # Upgrade upstart first, to prevent it from messing up our stubs and starting daemons anyway
 pkg_mgr install upstart
 
@@ -20,7 +19,7 @@ zip unzip \
 nfs-common flex psmisc apparmor-utils iptables sysstat \
 rsync openssh-server traceroute libncurses5-dev quota \
 libaio1 gdb libcap2-bin libcap-devel bzip2-devel \
-libyaml-devel cmake sudo nc rsyslog-relp"
+cmake sudo nc libuuid-devel"
 pkg_mgr install $packages
 
 # Lifted from bosh_debs

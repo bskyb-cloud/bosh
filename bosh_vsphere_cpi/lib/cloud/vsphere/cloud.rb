@@ -1,8 +1,10 @@
+require 'json'
 require 'membrane'
 require 'ruby_vim_sdk'
-
+require 'cloud'
 require 'cloud/vsphere/client'
 require 'cloud/vsphere/config'
+require 'cloud/vsphere/lease_obtainer'
 require 'cloud/vsphere/lease_updater'
 require 'cloud/vsphere/resources'
 require 'cloud/vsphere/resources/cluster'
@@ -14,6 +16,8 @@ require 'cloud/vsphere/resources/scorer'
 require 'cloud/vsphere/resources/util'
 require 'cloud/vsphere/models/disk'
 require 'cloud/vsphere/path_finder'
+require 'cloud/vsphere/vm_creator_builder'
+require 'cloud/vsphere/fixed_cluster_placer'
 
 module VSphereCloud
 
@@ -26,12 +30,12 @@ module VSphereCloud
     attr_accessor :client
 
     def initialize(options)
-      Config.configure(options)
+      @config = Config.build(options)
 
-      @logger = Config.logger
-      @client = Config.client
-      @rest_client = Config.rest_client
-      @resources = Resources.new
+      @logger = config.logger
+      @client = config.client
+      @rest_client = config.rest_client
+      @resources = Resources.new(config)
 
       # Global lock
       @lock = Mutex.new
@@ -83,14 +87,16 @@ module VSphereCloud
           @logger.info("Deploying to: #{cluster.mob} / #{datastore.mob}")
 
           import_spec_result = import_ovf(name, ovf_file, cluster.resource_pool.mob, datastore.mob)
-          lease = obtain_nfc_lease(cluster.resource_pool.mob, import_spec_result.import_spec,
-                                   cluster.datacenter.template_folder.mob)
-          @logger.info('Waiting for NFC lease')
-          state = wait_for_nfc_lease(lease)
-          raise "Could not acquire HTTP NFC lease (state is: #{state})" unless state == Vim::HttpNfcLease::State::READY
+
+          lease_obtainer = LeaseObtainer.new(@client, @logger)
+          nfc_lease = lease_obtainer.obtain(
+            cluster.resource_pool,
+            import_spec_result.import_spec,
+            cluster.datacenter.template_folder,
+          )
 
           @logger.info('Uploading')
-          vm = upload_ovf(ovf_file, lease, import_spec_result.file_item)
+          vm = upload_ovf(ovf_file, nfc_lease, import_spec_result.file_item)
           result = name
 
           @logger.info('Removing NICs')
@@ -159,108 +165,10 @@ module VSphereCloud
       client.find_by_inventory_path([dc.name, 'vm', dc.template_folder.name, name])
     end
 
-    def create_vm(agent_id, stemcell, resource_pool, networks, disk_locality = nil, environment = nil)
+    def create_vm(agent_id, stemcell, cloud_properties, networks, disk_locality = nil, environment = nil)
       with_thread_name("create_vm(#{agent_id}, ...)") do
-        memory = resource_pool['ram']
-        disk = resource_pool['disk']
-        cpu = resource_pool['cpu']
-
-        # Make sure number of cores is a power of 2. kb.vmware.com/kb/2003484
-        if cpu & cpu - 1 != 0
-          raise "Number of vCPUs: #{cpu} is not a power of 2."
-        end
-
-        stemcell_vm = stemcell_vm(stemcell)
-        raise "Could not find stemcell: #{stemcell}" if stemcell_vm.nil?
-
-        stemcell_size =
-          client.get_property(stemcell_vm, Vim::VirtualMachine, 'summary.storage.committed', ensure_all: true)
-        stemcell_size /= 1024 * 1024
-
-        disks = disk_spec(disk_locality)
-        # need to include swap and linked clone log
-        ephemeral = disk + memory + stemcell_size
-        cluster, datastore = @resources.place(memory, ephemeral, disks)
-
-        name = "vm-#{generate_unique_name}"
-        @logger.info("Creating vm: #{name} on #{cluster.mob} stored in #{datastore.mob}")
-
-        replicated_stemcell_vm = replicate_stemcell(cluster, datastore, stemcell)
-        replicated_stemcell_properties = client.get_properties(replicated_stemcell_vm, Vim::VirtualMachine,
-                                                               ['config.hardware.device', 'snapshot'],
-                                                               ensure_all: true)
-
-        devices = replicated_stemcell_properties['config.hardware.device']
-        snapshot = replicated_stemcell_properties['snapshot']
-
-        config = Vim::Vm::ConfigSpec.new(memory_mb: memory, num_cpus: cpu)
-        config.device_change = []
-
-        system_disk = devices.find { |device| device.kind_of?(Vim::Vm::Device::VirtualDisk) }
-        pci_controller = devices.find { |device| device.kind_of?(Vim::Vm::Device::VirtualPCIController) }
-
-        file_name = "[#{datastore.name}] #{name}/ephemeral_disk.vmdk"
-        ephemeral_disk_config =
-          create_disk_config_spec(datastore.mob, file_name, system_disk.controller_key, disk, create: true)
-        config.device_change << ephemeral_disk_config
-
-        dvs_index = {}
-        networks.each_value do |network|
-          v_network_name = network['cloud_properties']['name']
-          network_mob = client.find_by_inventory_path([cluster.datacenter.name, 'network', v_network_name])
-          nic_config = create_nic_config_spec(v_network_name, network_mob, pci_controller.key, dvs_index)
-          config.device_change << nic_config
-        end
-
-        nics = devices.select { |device| device.kind_of?(Vim::Vm::Device::VirtualEthernetCard) }
-        nics.each do |nic|
-          nic_config = create_delete_device_spec(nic)
-          config.device_change << nic_config
-        end
-
-        fix_device_unit_numbers(devices, config.device_change)
-
-        @logger.info("Cloning vm: #{replicated_stemcell_vm} to #{name}")
-
-        task = clone_vm(replicated_stemcell_vm,
-                        name,
-                        cluster.datacenter.vm_folder.mob,
-                        cluster.resource_pool.mob,
-                        datastore: datastore.mob, linked: true, snapshot: snapshot.current_snapshot, config: config)
-        vm = client.wait_for_task(task)
-
-        begin
-          upload_file(cluster.datacenter.name, datastore.name, "#{name}/env.iso", '')
-
-          vm_properties = client.get_properties(vm, Vim::VirtualMachine, ['config.hardware.device'], ensure_all: true)
-          devices = vm_properties['config.hardware.device']
-
-          # Configure the ENV CDROM
-          config = Vim::Vm::ConfigSpec.new
-          config.device_change = []
-          file_name = "[#{datastore.name}] #{name}/env.iso"
-          cdrom_change = configure_env_cdrom(datastore.mob, devices, file_name)
-          config.device_change << cdrom_change
-          client.reconfig_vm(vm, config)
-
-          network_env = generate_network_env(devices, networks, dvs_index)
-          disk_env = generate_disk_env(system_disk, ephemeral_disk_config.device)
-          env = generate_agent_env(name, vm, agent_id, network_env, disk_env)
-          env['env'] = environment
-          @logger.info("Setting VM env: #{env.pretty_inspect}")
-
-          location =
-            get_vm_location(vm, datacenter: cluster.datacenter.name, datastore: datastore.name, vm: name)
-          set_agent_env(vm, location, env)
-
-          @logger.info("Powering on VM: #{vm} (#{name})")
-          client.power_on_vm(cluster.datacenter.mob, vm)
-        rescue => e
-          @logger.info("#{e} - #{e.backtrace.join("\n")}")
-          delete_vm(name)
-          raise e
-        end
-        name
+        VmCreatorBuilder.new.build(choose_placer(cloud_properties), cloud_properties, @client, @logger, self).
+          create(agent_id, stemcell, networks, disk_locality, environment)
       end
     end
 
@@ -537,7 +445,7 @@ module VSphereCloud
             destination_path = "[#{persistent_datastore.name}] #{datacenter_disk_path}/#{disk.uuid}"
             @logger.info("Moving #{disk.datacenter}/#{source_path} to #{datacenter_name}/#{destination_path}")
 
-            if Config.copy_disks
+            if config.copy_disks
               client.copy_disk(source_datacenter, source_path, datacenter, destination_path)
               @logger.info('Copied disk successfully')
             else
@@ -582,7 +490,7 @@ module VSphereCloud
         location = get_vm_location(vm, datacenter: datacenter_name)
         env = get_current_agent_env(location)
         @logger.info("Reading current agent env: #{env.pretty_inspect}")
-        env['disks']['persistent'][disk.uuid] = attached_disk_config.device.unit_number
+        env['disks']['persistent'][disk.uuid] = attached_disk_config.device.unit_number.to_s
         @logger.info("Updating agent env to: #{env.pretty_inspect}")
         set_agent_env(vm, location, env)
         @logger.info('Attaching disk')
@@ -769,8 +677,8 @@ module VSphereCloud
 
     def generate_disk_env(system_disk, ephemeral_disk)
       {
-        'system' => system_disk.unit_number,
-        'ephemeral' => ephemeral_disk.unit_number,
+        'system' => system_disk.unit_number.to_s,
+        'ephemeral' => ephemeral_disk.unit_number.to_s,
         'persistent' => {}
       }
     end
@@ -786,7 +694,7 @@ module VSphereCloud
       env['agent_id'] = agent_id
       env['networks'] = networking_env
       env['disks'] = disk_env
-      env.merge!(Config.agent)
+      env.merge!(config.agent)
       env
     end
 
@@ -833,11 +741,11 @@ module VSphereCloud
 
     def get_current_agent_env(location)
       contents = fetch_file(location[:datacenter], location[:datastore], "#{location[:vm]}/env.json")
-      contents ? Yajl::Parser.parse(contents) : nil
+      contents ? JSON.load(contents) : nil
     end
 
     def set_agent_env(vm, location, env)
-      env_json = Yajl::Encoder.encode(env)
+      env_json = JSON.dump(env)
 
       connect_cdrom(vm, false)
       upload_file(location[:datacenter], location[:datastore], "#{location[:vm]}/env.json", env_json)
@@ -902,7 +810,7 @@ module VSphereCloud
     def fetch_file(datacenter_name, datastore_name, path)
       retry_block do
         url =
-          "https://#{Config.vcenter.host}/folder/#{path}?dcPath=#{URI.escape(datacenter_name)}&dsName=#{URI.escape(datastore_name)}"
+          "https://#{config.vcenter_host}/folder/#{path}?dcPath=#{URI.escape(datacenter_name)}&dsName=#{URI.escape(datastore_name)}"
 
         response = @rest_client.get(url)
 
@@ -919,7 +827,7 @@ module VSphereCloud
     def upload_file(datacenter_name, datastore_name, path, contents)
       retry_block do
         url =
-          "https://#{Config.vcenter.host}/folder/#{path}?dcPath=#{URI.escape(datacenter_name)}&dsName=#{URI.escape(datastore_name)}"
+          "https://#{config.vcenter_host}/folder/#{path}?dcPath=#{URI.escape(datacenter_name)}&dsName=#{URI.escape(datastore_name)}"
         response = @rest_client.put(url,
                                     contents,
                                     { 'Content-Type' => 'application/octet-stream', 'Content-Length' => contents.length })
@@ -1029,22 +937,20 @@ module VSphereCloud
     end
 
     def fix_device_unit_numbers(devices, device_changes)
-      max_unit_numbers = {}
+      controllers_available_unit_numbers = Hash.new { |h,k| h[k] = (0..15).to_a }
       devices.each do |device|
         if device.controller_key
-          max_unit_number = max_unit_numbers[device.controller_key]
-          if max_unit_number.nil? || max_unit_number < device.unit_number
-            max_unit_numbers[device.controller_key] = device.unit_number
-          end
+          available_unit_numbers = controllers_available_unit_numbers[device.controller_key]
+          available_unit_numbers.delete(device.unit_number)
         end
       end
 
       device_changes.each do |device_change|
         device = device_change.device
         if device.controller_key && device.unit_number.nil?
-          max_unit_number = max_unit_numbers[device.controller_key] || 0
-          device.unit_number = max_unit_number + 1
-          max_unit_numbers[device.controller_key] = device.unit_number
+          available_unit_numbers = controllers_available_unit_numbers[device.controller_key]
+          raise "No available unit numbers for device: #{device.inspect}" if available_unit_numbers.empty?
+          device.unit_number = available_unit_numbers.shift
         end
       end
     end
@@ -1124,5 +1030,39 @@ module VSphereCloud
         sleep(1.0)
       end
     end
+
+    def get_vms
+      subfolders = []
+      vms = []
+      with_thread_name("get_vms") do
+        @resources.datacenters.each_value do |datacenter|
+          @logger.info("Looking for VMs in: #{datacenter.name} - #{datacenter.vm_folder.name}")
+          subfolders += datacenter.vm_folder.mob.child_entity
+        end
+      end
+
+      subfolders.each do |folder|
+        vms += folder.child_entity
+      end
+
+      vms
+    end
+
+    private
+
+    def choose_placer(cloud_properties)
+      datacenter_spec = cloud_properties.fetch('datacenters', []).first
+      cluster_spec = datacenter_spec.fetch('clusters', []).first if datacenter_spec
+      placer = FixedClusterPlacer.new(find_cluster(cluster_spec)) unless cluster_spec.nil?
+
+      placer.nil? ? @resources : placer
+    end
+
+    def find_cluster(cluster_spec)
+      datacenter = Resources::Datacenter.new(config)
+      datacenter.clusters[cluster_spec.keys.first]
+    end
+
+    attr_reader :config
   end
 end

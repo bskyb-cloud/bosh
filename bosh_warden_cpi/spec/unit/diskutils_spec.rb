@@ -10,7 +10,7 @@ describe Bosh::WardenCloud::DiskUtils do
     @stemcell_path =  Dir.mktmpdir('stemcell-path')
     @stemcell_root = File.join(@stemcell_path, 'stemcell-uuid')
     @disk_util =  described_class.new(@disk_root, @stemcell_path, 'ext4')
-    @disk_util.stub(:sleep) {}
+    allow(@disk_util).to receive(:sleep) {}
   end
 
   after :each do
@@ -23,8 +23,8 @@ describe Bosh::WardenCloud::DiskUtils do
       mock_sh("tar -C #{@stemcell_root} -xzf #{image_path} 2>&1", true)
       @disk_util.stemcell_unpack(image_path, 'stemcell-uuid')
       Dir.chdir(@stemcell_path) do
-        Dir.glob('*').should have(1).items
-        Dir.glob('*').should include('stemcell-uuid')
+        expect(Dir.glob('*').size).to eq(1)
+        expect(Dir.glob('*')).to include('stemcell-uuid')
       end
     end
 
@@ -41,8 +41,8 @@ describe Bosh::WardenCloud::DiskUtils do
       Dir.chdir(@stemcell_path) do
         mock_sh("tar -C #{@stemcell_root} -xzf #{image_path} 2>&1", true)
         @disk_util.stemcell_unpack(image_path, 'stemcell-uuid')
-        Dir.glob('*').should have(1).items
-        Dir.glob('*').should include('stemcell-uuid')
+        expect(Dir.glob('*').size).to eq(1)
+        expect(Dir.glob('*')).to include('stemcell-uuid')
         mock_sh("rm -rf #{@stemcell_root}", true)
         @disk_util.stemcell_delete('stemcell-uuid')
       end
@@ -55,11 +55,11 @@ describe Bosh::WardenCloud::DiskUtils do
       @disk_util.create_disk('disk-uuid', 1)
       Dir.chdir(@disk_root) do
         image = 'disk-uuid.img'
-        Dir.glob('*').should have(1).items
-        Dir.glob('*').should include(image)
-        File.stat(image).size.should == 1 << 20
+        expect(Dir.glob('*').size).to eq(1)
+        expect(Dir.glob('*')).to include(image)
+        expect(File.stat(image).size).to eq(1 << 20)
       end
-      @disk_util.disk_exist?('disk-uuid').should == true
+      expect(@disk_util.disk_exist?('disk-uuid')).to be true
     end
 
     it 'should raise error if size is 0' do
@@ -75,12 +75,12 @@ describe Bosh::WardenCloud::DiskUtils do
     end
 
     it 'should clean up when create disk failed' do
-      @disk_util.stub(:image_path) { '/path/not/exist' }
+      allow(@disk_util).to receive(:image_path) { '/path/not/exist' }
       expect {
         @disk_util.create_disk('disk-uuid', 1)
       }.to raise_error
       Dir.chdir(@disk_root) do
-        Dir.glob('*').should be_empty
+        expect(Dir.glob('*')).to be_empty
       end
     end
   end
@@ -93,22 +93,22 @@ describe Bosh::WardenCloud::DiskUtils do
 
     it 'can delete disk' do
       Dir.chdir(@disk_root) do
-        Dir.glob('*').should have(1).items
-        Dir.glob('*').should include('disk-uuid.img')
+        expect(Dir.glob('*').size).to eq(1)
+        expect(Dir.glob('*')).to include('disk-uuid.img')
         @disk_util.delete_disk('disk-uuid')
-        Dir.glob('*').should be_empty
+        expect(Dir.glob('*')).to be_empty
       end
     end
   end
 
   context 'disk exist' do
     it 'should detect non-existed disk' do
-      @disk_util.disk_exist?('12345').should == false
+      expect(@disk_util.disk_exist?('12345')).to be false
     end
 
     it 'should return true for existed disk' do
       @disk_util.create_disk('disk-uuid', 1)
-      @disk_util.disk_exist?('disk-uuid').should == true
+      expect(@disk_util.disk_exist?('disk-uuid')).to be true
     end
   end
 
@@ -129,13 +129,13 @@ describe Bosh::WardenCloud::DiskUtils do
 
     it 'will sudo invoke umount to detach loop device' do
       mock_sh("umount #{@vm_id_path}", true)
-      @disk_util.stub(:mount_entry).and_return('nop', nil)
+      allow(@disk_util).to receive(:mount_entry).and_return('nop', nil)
       @disk_util.umount_disk(@vm_id_path)
     end
 
     it 'will retry umount for detach disk' do
       mock_sh("umount #{@vm_id_path}", true, Bosh::WardenCloud::DiskUtils::UMOUNT_GUARD_RETRIES + 1, false)
-      @disk_util.stub(:mount_entry).and_return('nop')
+      allow(@disk_util).to receive(:mount_entry).and_return('nop')
 
       expect {
         @disk_util.umount_disk(@vm_id_path)

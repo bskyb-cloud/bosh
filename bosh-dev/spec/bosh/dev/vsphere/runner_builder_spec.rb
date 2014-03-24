@@ -1,14 +1,14 @@
 require 'spec_helper'
-require 'bosh/dev/bat_helper'
+require 'bosh/dev/bat/artifacts'
 require 'bosh/dev/vsphere/runner_builder'
 
 module Bosh::Dev::VSphere
   describe RunnerBuilder do
     describe '#build' do
       it 'returns vsphere runner with injected env and proper director address' do
-        bat_helper = instance_double(
-          'Bosh::Dev::BatHelper',
-          bosh_stemcell_path: 'stemcell-path',
+        artifacts = instance_double(
+          'Bosh::Dev::Bat::Artifacts',
+          bat_stemcell_path: 'bat-stemcell-path',
         )
 
         director_address = instance_double('Bosh::Dev::Bat::DirectorAddress')
@@ -28,7 +28,7 @@ module Bosh::Dev::VSphere
         )
         Bosh::Stemcell::Archive
           .should_receive(:new)
-          .with('stemcell-path')
+          .with('bat-stemcell-path')
           .and_return(stemcell_archive)
 
         microbosh_deployment_manifest = instance_double('Bosh::Dev::VSphere::MicroBoshDeploymentManifest')
@@ -36,6 +36,11 @@ module Bosh::Dev::VSphere
           .should_receive(:new)
           .with(ENV)
           .and_return(microbosh_deployment_manifest)
+
+        microbosh_deployment_cleaner = instance_double('Bosh::Dev::VSphere::MicroBoshDeploymentCleaner')
+        Bosh::Dev::VSphere::MicroBoshDeploymentCleaner
+          .should_receive(:new).with(microbosh_deployment_manifest)
+          .and_return(microbosh_deployment_cleaner)
 
         director_uuid = instance_double('Bosh::Dev::Bat::DirectorUuid')
         Bosh::Dev::Bat::DirectorUuid
@@ -52,15 +57,17 @@ module Bosh::Dev::VSphere
         runner = instance_double('Bosh::Dev::Bat::Runner')
         Bosh::Dev::Bat::Runner.should_receive(:new).with(
           ENV,
-          bat_helper,
+          artifacts,
           director_address,
           bosh_cli_session,
           stemcell_archive,
           microbosh_deployment_manifest,
-          bat_deployment_manifest
+          bat_deployment_manifest,
+          microbosh_deployment_cleaner,
+          be_an_instance_of(Logger),
         ).and_return(runner)
 
-        expect(subject.build(bat_helper, 'net-type')).to eq(runner)
+        expect(subject.build(artifacts, 'net-type')).to eq(runner)
       end
     end
   end

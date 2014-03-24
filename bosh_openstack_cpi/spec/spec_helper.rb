@@ -1,6 +1,8 @@
 # Copyright (c) 2009-2013 VMware, Inc.
 # Copyright (c) 2012 Piston Cloud Computing, Inc.
-require 'rspec'
+
+require File.expand_path('../../../spec/shared_spec_helper', __FILE__)
+
 require 'tmpdir'
 require 'zlib'
 require 'archive/tar/minitar'
@@ -49,7 +51,7 @@ def make_cloud(options = nil)
 end
 
 def mock_registry(endpoint = 'http://registry:3333')
-  registry = mock('registry', :endpoint => endpoint)
+  registry = double('registry', :endpoint => endpoint)
   Bosh::Registry::Client.stub(:new).and_return(registry)
   registry
 end

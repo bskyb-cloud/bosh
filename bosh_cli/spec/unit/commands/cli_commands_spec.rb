@@ -7,7 +7,6 @@ describe Bosh::Cli::Command::Base do
   before :each do
     tmpdir = Dir.mktmpdir
     @config = File.join(tmpdir, 'bosh_config')
-    @cache = File.join(tmpdir, 'bosh_cache')
     @director = double(Bosh::Cli::Client::Director)
     Bosh::Cli::Client::Director.stub(:new).and_return(@director)
     @director.stub(:get_status).and_return('name' => 'ZB')
@@ -18,7 +17,6 @@ describe Bosh::Cli::Command::Base do
     before :each do
       @cmd = Bosh::Cli::Command::Misc.new
       @cmd.add_option(:config, @config)
-      @cmd.add_option(:cache_dir, @cache)
       @cmd.add_option(:non_interactive, true)
     end
 
@@ -68,7 +66,7 @@ describe Bosh::Cli::Command::Base do
       @director.should_receive(:password=).with('pass')
       @cmd.set_target('test')
       @cmd.login('user', 'pass')
-      @cmd.logged_in?.should be_true
+      @cmd.logged_in?.should be(true)
       @cmd.username.should == 'user'
       @cmd.password.should == 'pass'
     end
@@ -79,7 +77,7 @@ describe Bosh::Cli::Command::Base do
       @director.should_receive(:password=).with('pass')
       @cmd.set_target('test')
       @cmd.login(HighLine::String.new('user'), HighLine::String.new('pass'))
-      @cmd.logged_in?.should be_true
+      @cmd.logged_in?.should be(true)
       @cmd.username.should == 'user'
       @cmd.password.should == 'pass'
       config_file = File.read(File.expand_path(@config))
@@ -95,7 +93,7 @@ describe Bosh::Cli::Command::Base do
       @director.should_receive(:password=).with('pass')
       @cmd.login('user', 'pass')
       @cmd.logout
-      @cmd.logged_in?.should be_false
+      @cmd.logged_in?.should be(false)
     end
 
     it 'respects director checks option when logging in' do
@@ -107,7 +105,7 @@ describe Bosh::Cli::Command::Base do
       @director.should_receive(:user=).with('user')
       @director.should_receive(:password=).with('pass')
       @cmd.login('user', 'pass')
-      @cmd.logged_in?.should be_true
+      @cmd.logged_in?.should be(true)
       @cmd.username.should == 'user'
       @cmd.password.should == 'pass'
     end

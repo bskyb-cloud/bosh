@@ -1,63 +1,39 @@
 require 'spec_helper'
 require 'bosh/stemcell/builder_options'
-require 'bosh/stemcell/infrastructure'
-require 'bosh/stemcell/operating_system'
+require 'bosh/stemcell/definition'
 
 module Bosh::Stemcell
   describe BuilderOptions do
-    subject(:stemcell_builder_options) { described_class.new(env, options) }
-    let(:env) { {} }
-    let(:options) do
+    subject(:stemcell_builder_options) { described_class.new(dependencies) }
+    let(:dependencies) do
       {
-        tarball: 'fake/release.tgz',
-        stemcell_version: '007',
-        infrastructure: infrastructure,
-        operating_system: operating_system
+        env: env,
+        definition: definition,
+        version: '007',
+        release_tarball: 'fake/release.tgz',
+        os_image_tarball: 'fake/os_image.tgz',
       }
     end
 
+    let(:env) { {} }
+
+    let(:definition) {
+      instance_double(
+        'Bosh::Stemcell::Definition',
+        infrastructure: infrastructure,
+        operating_system: operating_system,
+        agent: agent,
+      )
+    }
+
     let(:infrastructure) { Infrastructure.for('aws') }
     let(:operating_system) { OperatingSystem.for('ubuntu') }
+    let(:agent) { Agent.for('ruby') }
     let(:expected_source_root) { File.expand_path('../../../../..', __FILE__) }
     let(:archive_filename) { instance_double('Bosh::Stemcell::ArchiveFilename', to_s: 'FAKE_STEMCELL.tgz') }
 
     before do
-      ArchiveFilename.stub(:new).
-        with('007', infrastructure, operating_system, 'bosh-stemcell', false).and_return(archive_filename)
-    end
-
-    describe '#initialize' do
-      context 'when :tarball is not set' do
-        before { options.delete(:tarball) }
-
-        it 'dies' do
-          expect { stemcell_builder_options }.to raise_error('key not found: :tarball')
-        end
-      end
-
-      context 'when :stemcell_version is not set' do
-        before { options.delete(:stemcell_version) }
-
-        it 'dies' do
-          expect { stemcell_builder_options }.to raise_error('key not found: :stemcell_version')
-        end
-      end
-
-      context 'when :infrastructure is not set' do
-        before { options.delete(:infrastructure) }
-
-        it 'dies' do
-          expect { stemcell_builder_options }.to raise_error('key not found: :infrastructure')
-        end
-      end
-
-      context 'when :operating_system is not set' do
-        before { options.delete(:operating_system) }
-
-        it 'dies' do
-          expect { stemcell_builder_options }.to raise_error('key not found: :operating_system')
-        end
-      end
+      allow(ArchiveFilename).to receive(:new).and_return(archive_filename)
     end
 
     describe '#default' do
@@ -67,6 +43,8 @@ module Bosh::Stemcell
       it 'sets stemcell_tgz' do
         result = stemcell_builder_options.default
         expect(result['stemcell_tgz']).to eq(archive_filename.to_s)
+        expect(ArchiveFilename).to have_received(:new)
+          .with('007', definition, 'bosh-stemcell', false)
       end
 
       it 'sets stemcell_image_name' do
@@ -108,12 +86,14 @@ module Bosh::Stemcell
             expect(result['ruby_bin']).to eq('fake_ruby_bin')
             expect(result['bosh_release_src_dir']).to eq(File.join(expected_source_root, '/release/src/bosh'))
             expect(result['bosh_agent_src_dir']).to eq(File.join(expected_source_root, 'bosh_agent'))
+            expect(result['go_agent_src_dir']).to eq(File.join(expected_source_root, 'go_agent'))
             expect(result['image_create_disk_size']).to eq(default_disk_size)
             expect(result['bosh_micro_enabled']).to eq('yes')
             expect(result['bosh_micro_package_compiler_path']).to eq(
-              File.join(expected_source_root, 'package_compiler'))
+              File.join(expected_source_root, 'bosh-release'))
             expect(result['bosh_micro_manifest_yml_path']).to eq(expected_release_micro_manifest_path)
             expect(result['bosh_micro_release_tgz_path']).to eq('fake/release.tgz')
+            expect(result['os_image_tgz']).to eq('fake/os_image.tgz')
           end
 
           context 'when RUBY_BIN is not set' do
@@ -140,12 +120,23 @@ module Bosh::Stemcell
           end
 
           context 'when disk_size is passed' do
-            before { options.merge!(disk_size: 1234) }
+            before { dependencies[:disk_size] = 1234 }
 
             it 'allows user to override default disk_size' do
               result = stemcell_builder_options.default
 
               expect(result['image_create_disk_size']).to eq(1234)
+            end
+          end
+
+          context 'when go agent is used' do
+            let(:agent) { Agent.for('go') }
+
+            it 'changes the stemcell_name' do
+              result = stemcell_builder_options.default
+
+              expect(result['stemcell_name']).to eq(
+                "bosh-#{infrastructure.name}-#{infrastructure.hypervisor}-#{operating_system.name}-go_agent")
             end
           end
         end
@@ -158,29 +149,53 @@ module Bosh::Stemcell
 
           it_sets_correct_environment_variables
 
-          it 'has no "image_vsphere_ovf_ovftool_path" key' do
-            expect(stemcell_builder_options.default).not_to have_key('image_vsphere_ovf_ovftool_path')
+          it 'has no "image_ovftool_path" key' do
+            expect(stemcell_builder_options.default).not_to have_key('image_ovftool_path')
           end
         end
 
         context 'when infrastruture is vsphere' do
           let(:infrastructure) { Infrastructure.for('vsphere') }
+          let(:default_disk_size) { 3072 }
 
           it_sets_correct_environment_variables
 
-          it 'has an "image_vsphere_ovf_ovftool_path" key' do
+          it 'has an "image_ovftool_path" key' do
             result = stemcell_builder_options.default
 
-            expect(result['image_vsphere_ovf_ovftool_path']).to be_nil
+            expect(result['image_ovftool_path']).to be_nil
           end
 
           context 'if you have OVFTOOL set in the environment' do
             let(:env) { { 'OVFTOOL' => 'fake_ovf_tool_path' } }
 
-            it 'sets image_vsphere_ovf_ovftool_path' do
+            it 'sets image_ovftool_path' do
               result = stemcell_builder_options.default
 
-              expect(result['image_vsphere_ovf_ovftool_path']).to eq('fake_ovf_tool_path')
+              expect(result['image_ovftool_path']).to eq('fake_ovf_tool_path')
+            end
+          end
+        end
+
+        context 'when infrastruture is vcloud' do
+          let(:infrastructure) { Infrastructure.for('vcloud') }
+          let(:default_disk_size) { 3072 }
+
+          it_sets_correct_environment_variables
+
+          it 'has an "image_ovftool_path" key' do
+            result = stemcell_builder_options.default
+
+            expect(result['image_ovftool_path']).to be_nil
+          end
+
+          context 'if you have OVFTOOL set in the environment' do
+            let(:env) { { 'OVFTOOL' => 'fake_ovf_tool_path' } }
+
+            it 'sets image_ovftool_path' do
+              result = stemcell_builder_options.default
+
+              expect(result['image_ovftool_path']).to eq('fake_ovf_tool_path')
             end
           end
         end
@@ -191,8 +206,8 @@ module Bosh::Stemcell
 
           it_sets_correct_environment_variables
 
-          it 'has no "image_vsphere_ovf_ovftool_path" key' do
-            expect(stemcell_builder_options.default).not_to have_key('image_vsphere_ovf_ovftool_path')
+          it 'has no "image_ovftool_path" key' do
+            expect(stemcell_builder_options.default).not_to have_key('image_ovftool_path')
           end
         end
       end

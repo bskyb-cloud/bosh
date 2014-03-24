@@ -1,6 +1,6 @@
 require 'spec_helper'
 require 'bosh/dev/bat/runner'
-require 'bosh/dev/bat_helper'
+require 'bosh/dev/bat/artifacts'
 require 'bosh/dev/bat/director_address'
 require 'bosh/dev/bat/director_uuid'
 require 'bosh/dev/bosh_cli_session'
@@ -13,25 +13,29 @@ module Bosh::Dev::Bat
     subject do
       described_class.new(
         env,
-        bat_helper,
+        artifacts,
         director_address,
         bosh_cli_session,
         stemcell_archive,
         microbosh_deployment_manifest,
-        bat_deployment_manifest
+        bat_deployment_manifest,
+        microbosh_deployment_cleaner,
+        logger,
       )
     end
 
     let(:env) { {} }
+    let(:logger) { Logger.new('/dev/null') }
 
-    before { FileUtils.mkdir_p(bat_helper.micro_bosh_deployment_dir) }
-    let(:bat_helper) do
+    before { FileUtils.mkdir_p(artifacts.micro_bosh_deployment_dir) }
+    let(:artifacts) do
       instance_double(
-        'Bosh::Dev::BatHelper',
-        artifacts_dir:              '/AwsRunner_fake_artifacts_dir',
-        micro_bosh_deployment_dir:  '/AwsRunner_fake_artifacts_dir/fake_micro_bosh_deployment_dir',
+        'Bosh::Dev::Bat::Artifacts',
+        path:                       '/AwsRunner_fake_artifacts_path',
+        micro_bosh_deployment_dir:  '/AwsRunner_fake_artifacts_path/fake_micro_bosh_deployment_dir',
         micro_bosh_deployment_name: 'fake_micro_bosh_deployment_name',
         bosh_stemcell_path:         'fake_bosh_stemcell_path',
+        bat_stemcell_path:          'fake_bat_stemcell_path',
       )
     end
 
@@ -46,7 +50,9 @@ module Bosh::Dev::Bat
       )
     end
 
+    # Multiple implementations for the following
     let(:microbosh_deployment_manifest) { double('microbosh-deployment-manifest', write: nil) }
+    let(:microbosh_deployment_cleaner) { double('microbosh-deployment-cleaner', clean: nil) }
     let(:bat_deployment_manifest) { double('bat-deployment-manifest', write: nil) }
 
     describe '#deploy_microbosh_and_run_bats' do
@@ -57,7 +63,12 @@ module Bosh::Dev::Bat
           FileUtils.touch(File.join(Dir.pwd, 'FAKE_MICROBOSH_MANIFEST'))
         end
         subject.deploy_microbosh_and_run_bats
-        expect(Dir.entries(bat_helper.micro_bosh_deployment_dir)).to include('FAKE_MICROBOSH_MANIFEST')
+        expect(Dir.entries(artifacts.micro_bosh_deployment_dir)).to include('FAKE_MICROBOSH_MANIFEST')
+      end
+
+      it 'cleans any previous deployments out' do
+        microbosh_deployment_cleaner.should_receive(:clean)
+        subject.deploy_microbosh_and_run_bats
       end
 
       it 'targets the micro' do
@@ -77,58 +88,9 @@ module Bosh::Dev::Bat
         subject.deploy_microbosh_and_run_bats
       end
 
-      it 'uploads the bosh stemcell to the micro' do
-        bosh_cli_session.should_receive(:run_bosh).with(
-          'upload stemcell fake_bosh_stemcell_path', debug_on_fail: true)
-        subject.deploy_microbosh_and_run_bats
-      end
-
       it 'runs bats' do
         subject.should_receive(:run_bats)
         subject.deploy_microbosh_and_run_bats
-      end
-
-      def self.it_cleans_up_after_rake_task(ignore_error = false)
-        it 'deletes the bat deployment, stemcell and then micro' do
-          bosh_cli_session
-            .should_receive(:run_bosh)
-            .with('delete deployment bat', ignore_failures: true)
-            .ordered
-
-          bosh_cli_session.should_receive(:run_bosh)
-            .with('delete stemcell stemcell-name 6', ignore_failures: true)
-            .ordered
-
-          bosh_cli_session
-            .should_receive(:run_bosh)
-            .with('micro delete', ignore_failures: true)
-            .ordered
-
-          begin
-            subject.deploy_microbosh_and_run_bats
-          rescue
-            raise unless ignore_error
-          end
-        end
-      end
-
-      context 'when running bats does not raise an error' do
-        before { subject.stub(:run_bats) }
-        it_cleans_up_after_rake_task
-
-        it 'does not raise an error' do
-          expect { subject.deploy_microbosh_and_run_bats }.to_not raise_error
-        end
-      end
-
-      context 'when running bats raises an error' do
-        before { subject.stub(:run_bats).and_raise(error) }
-        let(:error) { RuntimeError.new('error') }
-        it_cleans_up_after_rake_task(true)
-
-        it 're-raises bats error' do
-          expect { subject.deploy_microbosh_and_run_bats }.to raise_error(error)
-        end
       end
     end
 
@@ -136,20 +98,59 @@ module Bosh::Dev::Bat
       before { Rake::Task.stub(:[]).with('bat').and_return(bat_rake_task) }
       let(:bat_rake_task) { double("Rake::Task['bat']", invoke: nil) }
 
+      describe 'targetting the micro' do
+        def self.it_targets_micro(username, password)
+          it 'targets the micro with the correct username and password' do
+            expect(bosh_cli_session).to receive(:run_bosh).with(
+              "-u #{username} -p #{password} target director-hostname"
+            )
+            subject.run_bats
+          end
+        end
+
+        context 'when the environment does not specify a username or password' do
+          it_targets_micro 'admin', 'admin'
+        end
+
+        context 'when the environment specifies a username' do
+          before { env['BOSH_USER'] = 'username' }
+          it_targets_micro 'username', 'admin'
+        end
+
+        context 'when the environment specifies a password' do
+          before { env['BOSH_PASSWORD'] = 'password' }
+          it_targets_micro 'admin', 'password'
+        end
+
+        context 'when the environment specifies both a password and password' do
+          before do
+            env['BOSH_USER'] = 'username'
+            env['BOSH_PASSWORD'] = 'password'
+          end
+          it_targets_micro 'username', 'password'
+        end
+
+        it 'targets the director before writing the bosh manifest' do
+          expect(bosh_cli_session).to receive(:run_bosh).with(/target director-hostname/).ordered
+          expect(bat_deployment_manifest).to receive(:write).with(no_args).ordered
+          subject.run_bats
+        end
+      end
+
       it 'generates a bat manifest' do
         bat_deployment_manifest.should_receive(:write) do
           FileUtils.touch(File.join(Dir.pwd, 'FAKE_BAT_MANIFEST'))
         end
         subject.run_bats
-        expect(Dir.entries(bat_helper.artifacts_dir)).to include('FAKE_BAT_MANIFEST')
+        expect(Dir.entries(artifacts.path)).to include('FAKE_BAT_MANIFEST')
       end
 
       it 'sets the the required environment variables' do
         subject.run_bats
-        expect(env['BAT_DEPLOYMENT_SPEC']).to eq(File.join(bat_helper.artifacts_dir, 'bat.yml'))
+        expect(env['BAT_DEPLOYMENT_SPEC']).to eq(File.join(artifacts.path, 'bat.yml'))
         expect(env['BAT_DIRECTOR']).to eq('director-hostname')
         expect(env['BAT_DNS_HOST']).to eq('director-ip')
-        expect(env['BAT_STEMCELL']).to eq(bat_helper.bosh_stemcell_path)
+        expect(env['BAT_STEMCELL']).to eq(artifacts.bat_stemcell_path)
         expect(env['BAT_VCAP_PASSWORD']).to eq('c1oudc0w')
         expect(env['BAT_INFRASTRUCTURE']).to eq('infrastructure')
       end

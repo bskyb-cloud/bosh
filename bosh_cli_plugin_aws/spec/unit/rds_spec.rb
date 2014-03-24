@@ -5,7 +5,7 @@ describe Bosh::Aws::RDS do
   let(:db_instance_1) { instance_double('AWS::RDS::DBInstance', name: 'bosh_db', id: "db1") }
   let(:db_instance_2) { instance_double('AWS::RDS::DBInstance', name: 'cc_db', id: "db2") }
   let(:fake_aws_rds) { instance_double('AWS::RDS', db_instances: [db_instance_1, db_instance_2]) }
-  let(:fake_aws_rds_client) { instance_double('AWS::RDS::Client') }
+  let(:fake_aws_rds_client) { instance_double('AWS::RDS::Client::V20130909') }
 
   before(:each) do
     AWS::RDS.stub(new: fake_aws_rds)
@@ -18,7 +18,7 @@ describe Bosh::Aws::RDS do
           with(:db_subnet_group_name => "subnetgroup").
           and_raise AWS::RDS::Errors::DBSubnetGroupNotFoundFault
 
-      rds.subnet_group_exists?("subnetgroup").should be_false
+      rds.subnet_group_exists?("subnetgroup").should be(false)
     end
 
     it "should return true if the db subnet group exists" do
@@ -26,7 +26,7 @@ describe Bosh::Aws::RDS do
           with(:db_subnet_group_name => "subnetgroup").
           and_return("not_used")
 
-      rds.subnet_group_exists?("subnetgroup").should be_true
+      rds.subnet_group_exists?("subnetgroup").should be(true)
     end
   end
 

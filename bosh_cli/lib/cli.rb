@@ -1,9 +1,6 @@
-# Copyright (c) 2009-2012 VMware, Inc.
-
 module Bosh
   module Cli
     DEFAULT_CONFIG_PATH = File.expand_path('~/.bosh_config')
-    DEFAULT_CACHE_DIR = File.expand_path('~/.bosh_cache')
   end
 end
 
@@ -48,9 +45,9 @@ require 'cli/yaml_helper'
 require 'cli/version_calc'
 require 'cli/dependency_helper'
 require 'cli/deployment_manifest'
+require 'cli/manifest_warnings'
 require 'cli/deployment_helper'
 require 'cli/validation'
-require 'cli/cache'
 require 'cli/stemcell'
 require 'cli/client/director'
 require 'cli/director_task'
@@ -63,11 +60,8 @@ require 'cli/packaging_helper'
 require 'cli/package_builder'
 require 'cli/job_builder'
 require 'cli/changeset_helper'
-require 'cli/task_tracker'
-require 'cli/task_log_renderer'
-require 'cli/event_log_renderer'
-require 'cli/null_renderer'
 require 'cli/deployment_manifest_compiler'
+require 'cli/task_tracking'
 
 require 'cli/release'
 require 'cli/release_builder'

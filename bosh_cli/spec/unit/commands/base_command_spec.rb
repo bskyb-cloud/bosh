@@ -4,7 +4,6 @@ describe Bosh::Cli::Command::Base do
   before do
     @runner = double(Bosh::Cli::Runner)
     @config_file = File.join(Dir.mktmpdir, 'bosh_config')
-    @cache_dir = Dir.mktmpdir
   end
 
   def add_config(object)
@@ -85,10 +84,10 @@ describe Bosh::Cli::Command::Base do
 
   it 'has logged_in? helper' do
     cmd = make
-    cmd.logged_in?.should be_false
+    cmd.logged_in?.should be(false)
     cmd.add_option(:username, 'foo')
-    cmd.logged_in?.should be_false
+    cmd.logged_in?.should be(false)
     cmd.add_option(:password, 'bar')
-    cmd.logged_in?.should be_true
+    cmd.logged_in?.should be(true)
   end
 end

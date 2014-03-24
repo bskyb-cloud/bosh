@@ -1,9 +1,14 @@
 require 'rake'
 require 'bosh/dev/gem_component'
+require 'bosh/dev/gem_version'
 
 module Bosh::Dev
   class GemComponents
     include Enumerable
+
+    def initialize(build_number)
+      @gem_version = GemVersion.new(build_number)
+    end
 
     def build_release_gems
       stage_with_dependencies
@@ -28,25 +33,26 @@ module Bosh::Dev
        bosh_cli_plugin_micro
        bosh_common
        bosh_cpi
-       bosh_encryption
        bosh_openstack_cpi
-       bosh_registry
+       bosh-registry
        bosh_vsphere_cpi
        bosh_warden_cpi
-       director
-       health_monitor
-       package_compiler
-       ruby_vim_sdk
+       bosh-director
+       bosh-director-core
+       bosh-monitor
+       bosh-release
        simple_blobstore_server
       ].each(&block)
     end
 
-    def dot_gems
-      map { |component| GemComponent.new(component).dot_gem }
+    def components
+      return @components if @components
+
+      @components = map { |component| GemComponent.new(component, @gem_version.version) }
     end
 
     def has_db?(component)
-      %w(director bosh_registry).include?(component)
+      %w(bosh-director bosh-registry).include?(component)
     end
 
     private
@@ -55,17 +61,11 @@ module Bosh::Dev
       GemComponent::ROOT
     end
 
-    def version
-      File.read("#{root}/BOSH_VERSION").strip
-    end
-
     def stage_with_dependencies
       FileUtils.rm_rf 'pkg'
 
-      each do |component|
-        gem_component = GemComponent.new(component)
-        gem_component.build_release_gem
-      end
+      components.each { |component| component.update_version }
+      components.each { |component| component.build_release_gem }
 
       FileUtils.mkdir_p "/tmp/all_the_gems/#{Process.pid}"
       Rake::FileUtilsExt.sh "cp #{root}/pkg/gems/*.gem /tmp/all_the_gems/#{Process.pid}"

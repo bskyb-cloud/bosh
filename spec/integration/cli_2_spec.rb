@@ -1,7 +1,7 @@
 require 'spec_helper'
 
-describe 'Bosh::Spec::IntegrationTest::CliUsage 2' do
-  include IntegrationExampleGroup
+describe 'cli: 2', type: :integration do
+  with_reset_sandbox_before_each
 
   # ~65s (possibly includes sandbox start)
   it 'can upload a stemcell' do
@@ -9,8 +9,7 @@ describe 'Bosh::Spec::IntegrationTest::CliUsage 2' do
     # That's the contents of image file:
     expected_id = Digest::SHA1.hexdigest("STEMCELL\n")
 
-    run_bosh("target http://localhost:#{current_sandbox.director_port}")
-    run_bosh('login admin admin')
+    target_and_login
     out = run_bosh("upload stemcell #{stemcell_filename}")
 
     expect(out).to match /Stemcell uploaded and created/
@@ -30,8 +29,7 @@ describe 'Bosh::Spec::IntegrationTest::CliUsage 2' do
     # That's the contents of image file:
     expected_id = Digest::SHA1.hexdigest("STEMCELL\n")
 
-    run_bosh("target http://localhost:#{current_sandbox.director_port}")
-    run_bosh('login admin admin')
+    target_and_login
     out = run_bosh("upload stemcell #{stemcell_filename}")
     expect(out).to match /Stemcell uploaded and created/
 
@@ -57,8 +55,7 @@ describe 'Bosh::Spec::IntegrationTest::CliUsage 2' do
   it 'can upload a release' do
     release_filename = spec_asset('valid_release.tgz')
 
-    run_bosh("target http://localhost:#{current_sandbox.director_port}")
-    run_bosh('login admin admin')
+    target_and_login
     out = run_bosh("upload release #{release_filename}")
 
     expect(out).to match /release uploaded/i
@@ -71,8 +68,7 @@ describe 'Bosh::Spec::IntegrationTest::CliUsage 2' do
   it 'fails to upload a release that is already uploaded' do
     release_filename = spec_asset('valid_release.tgz')
 
-    run_bosh("target http://localhost:#{current_sandbox.director_port}")
-    run_bosh('login admin admin')
+    target_and_login
     run_bosh("upload release #{release_filename}")
     out = run_bosh("upload release #{release_filename}", failure_expected: true)
 
@@ -81,8 +77,7 @@ describe 'Bosh::Spec::IntegrationTest::CliUsage 2' do
 
   context 'when deployed' do
     it 'fails to delete release in use but deletes a different release' do
-      run_bosh("target http://localhost:#{current_sandbox.director_port}")
-      run_bosh('login admin admin')
+      target_and_login
 
       run_bosh('create release', work_dir: TEST_RELEASE_DIR)
       run_bosh('upload release', work_dir: TEST_RELEASE_DIR)
@@ -120,15 +115,13 @@ describe 'Bosh::Spec::IntegrationTest::CliUsage 2' do
       FileUtils.touch(new_file)
       run_bosh('create release --force', work_dir: Dir.pwd)
       FileUtils.rm_rf(new_file)
-      expect(File.exists?(release_1)).to be_true
+      expect(File.exists?(release_1)).to be(true)
       release_manifest = Psych.load_file(release_1)
       expect(release_manifest['commit_hash']).to eq commit_hash
-      expect(release_manifest['uncommitted_changes']).to be_true
+      expect(release_manifest['uncommitted_changes']).to be(true)
 
-      run_bosh("target http://localhost:#{current_sandbox.director_port}")
-      run_bosh('login admin admin')
+      target_and_login
       run_bosh('upload release', work_dir: Dir.pwd)
-
     end
 
     expect_output('releases', <<-OUT)

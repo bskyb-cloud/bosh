@@ -13,10 +13,10 @@ module Bosh::Agent
       def unmount(args)
         cid = args.first
         disk = Bosh::Agent::Config.platform.lookup_disk_by_cid(cid)
-        partition = "#{disk}1"
+        partition = Bosh::Agent::Config.platform.is_disk_blockdev?? "#{disk}1" : "#{disk}"
 
         if DiskUtil.mount_entry(partition)
-          @block, @mountpoint = DiskUtil.mount_entry(partition).split
+          @block, _, @mountpoint = DiskUtil.mount_entry(partition).split
           DiskUtil.umount_guard(@mountpoint)
           logger.info("Unmounted #{@block} on #{@mountpoint}")
           return {:message => "Unmounted #{@block} on #{@mountpoint}" }

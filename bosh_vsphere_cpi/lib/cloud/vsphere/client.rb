@@ -10,7 +10,7 @@ module VSphereCloud
     class NotLoggedInException < StandardError; end
 
     attr_accessor :service_content
-    attr_accessor :stub
+    attr_accessor :soap_stub
     attr_accessor :service_instance
 
     def initialize(host, options = {})
@@ -26,9 +26,9 @@ module VSphereCloud
       http_client.connect_timeout = 4
       http_client.ssl_config.verify_mode = OpenSSL::SSL::VERIFY_NONE
 
-      @stub = Soap::StubAdapter.new(host, "vim.version.version6", http_client)
+      @soap_stub = Soap::StubAdapter.new(host, "vim.version.version6", http_client)
 
-      @service_instance = Vim::ServiceInstance.new("ServiceInstance", stub)
+      @service_instance = Vim::ServiceInstance.new("ServiceInstance", soap_stub)
       @service_content = service_instance.content
       @metrics_cache  = {}
       @lock = Mutex.new
@@ -155,8 +155,11 @@ module VSphereCloud
     def power_on_vm(datacenter, vm)
       task = datacenter.power_on_vm([vm], nil)
       result = wait_for_task(task)
-      if result.attempted.nil?
-        raise "Could not power on VM: #{result.not_attempted.msg}"
+
+      raise "Recommendations were detected, you may be running in Manual DRS mode. Aborting." if result.recommendations.any?
+
+      if result.attempted.empty?
+        raise "Could not power on VM: #{result.not_attempted.map(&:msg).join(', ')}"
       else
         task = result.attempted.first.task
         wait_for_task(task)

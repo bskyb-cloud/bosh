@@ -65,8 +65,8 @@ module Bosh::Dev
     end
 
     describe '#upload_release' do
-      it 'uploads the release using the cli, rebasing assuming this is a dev release' do
-        cli.should_receive(:run_bosh).with('upload release /path/to/fake-release.tgz --rebase', debug_on_fail: true)
+      it 'uploads the release using the cli, skipping if the release already exists' do
+        cli.should_receive(:run_bosh).with('upload release /path/to/fake-release.tgz --skip-if-exists', debug_on_fail: true)
 
         director_client.upload_release('/path/to/fake-release.tgz')
       end
@@ -81,26 +81,55 @@ module Bosh::Dev
 
         director_client.upload_release('/path/to/fake-release.tgz')
       end
-
-      context 'when the release has previously been uploaded' do
-        it 'should ignore the associated error' do
-          cli.stub(:run_bosh).
-            with(/upload release/, debug_on_fail: true).
-            and_raise('... Error 100: Rebase is attempted without any job or package changes ...')
-
-          expect {
-            director_client.upload_release('/path/to/fake-release.tgz')
-          }.not_to raise_error
-        end
-      end
     end
 
     describe '#deploy' do
-      it 'sets the deployment and then runs a deplpy using the cli' do
+      let(:manifest_path) { '/path/to/fake-manifest.yml' }
+      include FakeFS::SpecHelpers
+
+      let(:manifest_yaml) { "---\n{}" }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(manifest_path))
+        File.open(manifest_path, 'w') { |f| f.write manifest_yaml }
+        allow(director_handle).to receive(:uuid)
+      end
+
+      context 'when directors uuid has changed' do
+        it 'updates the uuid in the manifest to the one from the targetted director' do
+          allow(director_handle).to receive('uuid').and_return('uuid_value')
+
+          director_client.deploy(manifest_path)
+          manifest = YAML.load_file(manifest_path)
+          expect(manifest['director_uuid']).to eq('uuid_value')
+        end
+      end
+
+      context 'when directors uuid has not changed' do
+        let(:manifest_yaml) do
+<<EOF
+---
+director_uuid: uuid_value
+test_ref: &ref
+  test_member: true
+test_pointer: *ref
+EOF
+        end
+
+        it 'does not change the manifest contents (i.e. update references and check into git)' do
+          allow(director_handle).to receive(:uuid).and_return('uuid_value')
+
+          director_client.deploy(manifest_path)
+          manifest = File.read(manifest_path)
+          expect(manifest).to eq(manifest_yaml)
+        end
+      end
+
+      it 'sets the deployment and then runs a deploy using the cli' do
         cli.should_receive(:run_bosh).with('deployment /path/to/fake-manifest.yml').ordered
         cli.should_receive(:run_bosh).with('deploy', debug_on_fail: true).ordered
 
-        director_client.deploy('/path/to/fake-manifest.yml')
+        director_client.deploy(manifest_path)
       end
 
       it 'always re-targets and logs in first' do
@@ -112,7 +141,7 @@ module Bosh::Dev
         cli.should_receive(:run_bosh).with(/deployment/).ordered
         cli.should_receive(:run_bosh).with(/deploy/, debug_on_fail: true).ordered
 
-        director_client.deploy('/path/to/fake-manifest.yml')
+        director_client.deploy(manifest_path)
       end
     end
   end

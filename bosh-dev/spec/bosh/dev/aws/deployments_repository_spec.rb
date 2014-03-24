@@ -1,7 +1,7 @@
 require 'spec_helper'
-require 'bosh/dev/aws/deployments_repository'
+require 'bosh/dev/deployments_repository'
 
-module Bosh::Dev::Aws
+module Bosh::Dev
   describe DeploymentsRepository do
     include FakeFS::SpecHelpers
 
@@ -64,6 +64,17 @@ module Bosh::Dev::Aws
             subject.clone_or_update!
           }.to change { Dir.exists?(subject.path) }.from(false).to(true)
         end
+      end
+    end
+
+    describe '#push' do
+      let(:git_repo_updater) { instance_double('Bosh::Dev::GitRepoUpdater') }
+
+      it 'commit and pushes the current state of the directory' do
+        Bosh::Dev::GitRepoUpdater.stub(:new) { git_repo_updater }
+        git_repo_updater.should_receive(:update_directory).with('/mnt/deployments')
+
+        subject.push
       end
     end
   end

@@ -34,12 +34,72 @@ module Bosh::Dev::Openstack
         let(:expected_yml) { <<YAML }
 ---
 name: microbosh-openstack-manual
+
 logging:
   level: DEBUG
+
 network:
   type: manual
   vip: vip
   ip: ip
+  cloud_properties:
+    net_id: net_id
+
+resources:
+  persistent_disk: 4096
+  cloud_properties:
+    instance_type: m1.small
+
+cloud:
+  plugin: openstack
+  properties:
+    openstack:
+      auth_url: auth_url
+      username: username
+      api_key: api_key
+      tenant: tenant
+      region: region
+      endpoint_type: publicURL
+      default_key_name: jenkins
+      default_security_groups:
+      - default
+      private_key: private_key_path
+      state_timeout: 300
+      connection_options:
+        connect_timeout: 60
+
+    # Default registry configuration needed by CPI
+    registry:
+      endpoint: http://admin:admin@localhost:25889
+      user: admin
+      password: admin
+
+apply_spec:
+  agent:
+    blobstore:
+      address: vip
+    nats:
+      address: vip
+  properties:
+    director:
+      max_vm_create_tries: 15
+YAML
+
+        it 'generates the correct YAML' do
+          expect(subject.to_h).to eq(Psych.load(expected_yml))
+        end
+      end
+
+      context 'when net_type is "dynamic"' do
+        let(:net_type) { 'dynamic' }
+        let(:expected_yml) { <<YAML }
+---
+name: microbosh-openstack-dynamic
+logging:
+  level: DEBUG
+network:
+  type: dynamic
+  vip: vip
   cloud_properties:
     net_id: net_id
 resources:
@@ -60,13 +120,22 @@ cloud:
       default_security_groups:
       - default
       private_key: private_key_path
+      state_timeout: 300
+      connection_options:
+        connect_timeout: 60
+    registry:
+      endpoint: http://admin:admin@localhost:25889
+      user: admin
+      password: admin
 apply_spec:
   agent:
     blobstore:
       address: vip
     nats:
       address: vip
-  properties: {}
+  properties:
+    director:
+      max_vm_create_tries: 15
 YAML
 
         it 'generates the correct YAML' do
@@ -74,45 +143,98 @@ YAML
         end
       end
 
-      context 'when net_type is "dynamic"' do
-        let(:net_type) { 'dynamic' }
-        let(:expected_yml) { <<YAML }
----
-name: microbosh-openstack-dynamic
-logging:
-  level: DEBUG
-network:
-  type: dynamic
-  vip: vip
-resources:
-  persistent_disk: 4096
-  cloud_properties:
-    instance_type: m1.small
-cloud:
-  plugin: openstack
-  properties:
-    openstack:
-      auth_url: auth_url
-      username: username
-      api_key: api_key
-      tenant: tenant
-      region: region
-      endpoint_type: publicURL
-      default_key_name: jenkins
-      default_security_groups:
-      - default
-      private_key: private_key_path
-apply_spec:
-  agent:
-    blobstore:
-      address: vip
-    nats:
-      address: vip
-  properties: {}
-YAML
+      context 'when BOSH_OPENSTACK_STATE_TIMEOUT is specified' do
+        it 'uses given env variable value (converted to a float) as a state_timeout' do
+          value = double('state_timeout', to_f: 'state_timeout_as_float')
+          env.merge!('BOSH_OPENSTACK_STATE_TIMEOUT' => value)
+          expect(subject.to_h['cloud']['properties']['openstack']['state_timeout']).to eq('state_timeout_as_float')
+        end
+      end
 
-        it 'generates the correct YAML' do
-          expect(subject.to_h).to eq(Psych.load(expected_yml))
+      context 'when BOSH_OPENSTACK_STATE_TIMEOUT is an empty string' do
+        it 'uses 300 (number) as a state_timeout' do
+          env.merge!('BOSH_OPENSTACK_STATE_TIMEOUT' => '')
+          expect(subject.to_h['cloud']['properties']['openstack']['state_timeout']).to eq(300)
+        end
+      end
+
+      context 'when BOSH_OPENSTACK_STATE_TIMEOUT is not specified' do
+        it 'uses 300 (number) as a state_timeout' do
+          env.merge!('BOSH_OPENSTACK_STATE_TIMEOUT' => nil)
+          expect(subject.to_h['cloud']['properties']['openstack']['state_timeout']).to eq(300)
+        end
+      end
+
+      context 'when BOSH_OPENSTACK_CONNECTION_TIMEOUT is specified' do
+        it 'uses given env variable value (converted to a float) as a connect_timeout' do
+          value = double('connection_timeout', to_f: 'connection_timeout_as_float')
+          env.merge!('BOSH_OPENSTACK_CONNECTION_TIMEOUT' => value)
+          expect(subject.to_h['cloud']['properties']['openstack']['connection_options']['connect_timeout']).to eq('connection_timeout_as_float')
+        end
+      end
+
+      context 'when BOSH_OPENSTACK_CONNECTION_TIMEOUT is an empty string' do
+        it 'uses 60 (number) as a connect_timeout' do
+          env.merge!('BOSH_OPENSTACK_CONNECTION_TIMEOUT' => '')
+          expect(subject.to_h['cloud']['properties']['openstack']['connection_options']['connect_timeout']).to eq(60)
+        end
+      end
+
+      context 'when BOSH_OPENSTACK_CONNECTION_TIMEOUT is not specified' do
+        it 'uses 60 (number) as a connect_timeout' do
+
+          env.merge!('BOSH_OPENSTACK_CONNECTION_TIMEOUT' => nil)
+          expect(subject.to_h['cloud']['properties']['openstack']['connection_options']['connect_timeout']).to eq(60)
+        end
+      end
+    end
+
+    its(:director_name) { should match(/microbosh-openstack-/) }
+
+    describe '#cpi_options' do
+      before do
+        env.merge!(
+          'BOSH_OPENSTACK_AUTH_URL' => 'fake-auth-url',
+          'BOSH_OPENSTACK_USERNAME' => 'fake-username',
+          'BOSH_OPENSTACK_API_KEY' => 'fake-api-key',
+          'BOSH_OPENSTACK_TENANT' => 'fake-tenant',
+          'BOSH_OPENSTACK_REGION' => 'fake-region',
+          'BOSH_OPENSTACK_PRIVATE_KEY' => 'fake-private-key-path',
+        )
+      end
+
+      it 'returns cpi options' do
+        expect(subject.cpi_options).to eq(
+          'openstack' => {
+            'auth_url' => 'fake-auth-url',
+            'username' => 'fake-username',
+            'api_key' => 'fake-api-key',
+            'tenant' => 'fake-tenant',
+            'region' => 'fake-region',
+            'endpoint_type' => 'publicURL',
+            'default_key_name' => 'jenkins',
+            'default_security_groups' => ['default'],
+            'private_key' => 'fake-private-key-path',
+            'state_timeout' => 300,
+            'connection_options' => {
+              'connect_timeout' => 60,
+            }
+          },
+          'registry' => {
+            'endpoint' => 'http://admin:admin@localhost:25889',
+            'user' => 'admin',
+            'password' => 'admin',
+          },
+        )
+      end
+
+      context 'when BOSH_OPENSTACK_REGISTRY_PORT is provided' do
+        before do
+          env.merge!('BOSH_OPENSTACK_REGISTRY_PORT' => '25880')
+        end
+
+        it 'sets the registry endpoint' do
+          expect(subject.cpi_options['registry']['endpoint']).to eq('http://admin:admin@localhost:25880')
         end
       end
     end

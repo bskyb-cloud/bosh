@@ -1,12 +1,17 @@
 require 'yajl'
+require 'bosh/dev/sandbox/main'
 
 module IntegrationExampleGroup
+  def logger
+    @logger ||= Logger.new(STDOUT)
+  end
+
+  def target_and_login
+    run_bosh("target http://localhost:#{current_sandbox.director_port}")
+    run_bosh('login admin admin')
+  end
+
   def deploy_simple(options={})
-    no_track = options.fetch(:no_track, false)
-    manifest_hash = options.fetch(:manifest_hash, Bosh::Spec::Deployments.simple_manifest)
-
-    deployment_manifest = yaml_file('simple', manifest_hash)
-
     run_bosh("target http://localhost:#{current_sandbox.director_port}")
     run_bosh('login admin admin')
 
@@ -14,55 +19,54 @@ module IntegrationExampleGroup
     run_bosh('upload release', work_dir: TEST_RELEASE_DIR)
 
     run_bosh("upload stemcell #{spec_asset('valid_stemcell.tgz')}")
+    deploy_simple_manifest(options)
+  end
 
-    run_bosh("deployment #{deployment_manifest.path}")
-    deploy_result = run_bosh("#{no_track ? "--no-track " : ""}deploy")
+  def deploy_simple_manifest(options={})
+    manifest_hash = options.fetch(:manifest_hash, Bosh::Spec::Deployments.simple_manifest)
+
+    # Hold reference to the tempfile so that it stays around
+    # until the end of tests or next deploy.
+    @deployment_manifest = yaml_file('simple', manifest_hash)
+    run_bosh("deployment #{@deployment_manifest.path}")
+
+    no_track = options.fetch(:no_track, false)
+    output = run_bosh("#{no_track ? '--no-track ' : ''}deploy")
     expect($?).to be_success
-    deploy_result
-  end
 
-  def start_sandbox
-    puts "Starting sandboxed environment for BOSH tests..."
-    current_sandbox.start
-  end
-
-  def stop_sandbox
-    puts "\n  Stopping sandboxed environment for BOSH tests..."
-    current_sandbox.stop
-    cleanup_bosh
-  end
-
-  def reset_sandbox(example)
-    desc = example ? example.example.metadata[:description] : ""
-    current_sandbox.reset(desc)
+    output
   end
 
   def run_bosh(cmd, options = {})
     failure_expected = options.fetch(:failure_expected, false)
     work_dir = options.fetch(:work_dir, BOSH_WORK_DIR)
+
     Dir.chdir(work_dir) do
-      command = "bosh -n -c #{BOSH_CONFIG} -C #{BOSH_CACHE_DIR} #{cmd}"
-      output = `#{command} 2>&1`
-      if $?.exitstatus != 0 && !failure_expected
-        puts command
-        puts output
+      logger.info("Running ... bosh -n #{cmd}")
+      command   = "bosh -n -c #{BOSH_CONFIG} #{cmd}"
+      output    = `#{command} 2>&1`
+      exit_code = $?.exitstatus
+
+      if exit_code != 0 && !failure_expected
+        if output =~ /bosh (task \d+ --debug)/
+          logger.info(run_bosh($1, options.merge(failure_expected: true))) rescue nil
+        end
+        raise "ERROR: #{command} failed with #{output}"
       end
-      output
+
+      options.fetch(:return_exit_code, false) ? [output, exit_code] : output
     end
   end
 
-  def run_bosh_cck_ignore_errors(num_errors)
-    resolution_selections = "1\n"*num_errors + "yes"
-    output = `echo "#{resolution_selections}" | bosh -c #{BOSH_CONFIG} -C #{BOSH_CACHE_DIR} cloudcheck`
-    if $?.exitstatus != 0
-      puts output
+  def yaml_file(name, object)
+    Tempfile.new(name).tap do |f|
+      f.write(Psych.dump(object))
+      f.close
     end
-    output
   end
 
-  def current_sandbox
-    @current_sandbox = Thread.current[:sandbox] || Bosh::Spec::Sandbox.new
-    Thread.current[:sandbox] = @current_sandbox
+  def spec_asset(name)
+    File.expand_path("../../assets/#{name}", __FILE__)
   end
 
   def regexp(string)
@@ -73,12 +77,14 @@ module IntegrationExampleGroup
     out.gsub(/^\s*/, '').gsub(/\s*$/, '')
   end
 
+  # forcefully suppress raising on error...caller beware
   def expect_output(cmd, expected_output)
-    format_output(run_bosh(cmd)).should == format_output(expected_output)
+    expect(format_output(run_bosh(cmd, :failure_expected => true))).
+      to eq(format_output(expected_output))
   end
 
   def get_vms
-    output = run_bosh("vms --details")
+    output = run_bosh('vms --details')
     table = output.lines.grep(/\|/)
 
     table = table.map { |line| line.split('|').map(&:strip).reject(&:empty?) }
@@ -93,10 +99,15 @@ module IntegrationExampleGroup
     output
   end
 
-  def wait_for_vm(name)
-    5.times do
+  def wait_for_vm(name, timeout_seconds = 300)
+    start_time = Time.now
+    loop do
       vm = get_vms.detect { |v| v[:job_index] == name }
       return vm if vm
+
+      break if Time.now - start_time >= timeout_seconds
+
+      sleep(1)
     end
     nil
   end
@@ -106,59 +117,109 @@ module IntegrationExampleGroup
     Process.kill('INT', vm[:cid].to_i)
     vm[:cid]
   end
+end
 
-  def self.included(base)
-    base.before(:each) do |example|
-      unless $sandbox_started
-        start_sandbox
-        $sandbox_started = true
-        at_exit do
-          begin
-            if $!
-              status = $!.is_a?(::SystemExit) ? $!.status : 1
-            else
-              status = 0
-            end
-            stop_sandbox
-          ensure
-            exit status
-          end
-        end
-      end
+module IntegrationSandboxHelpers
+  def start_sandbox
+    return if $sandbox_started
+    $sandbox_started = true
 
-      reset_sandbox(example) unless example.example.metadata[:no_reset]
-    end
+    logger.info('Starting sandboxed environment for BOSH tests...')
+    current_sandbox.start
 
-    base.after(:each) do |example|
-      desc = example ? example.example.metadata[:description] : ""
-      current_sandbox.save_task_logs(desc)
-      FileUtils.rm_rf(current_sandbox.cloud_storage_dir)
-    end
-  end
-
-  def events(task_id)
-    result = run_bosh("task #{task_id} --raw")
-
-    event_list = []
-    result.each_line do |line|
+    at_exit do
       begin
-        event = Yajl::Parser.new.parse(line)
-        event_list << event if event
-
-      rescue Yajl::ParseError
+        status = $! ? ($!.is_a?(::SystemExit) ? $!.status : 1) : 0
+        logger.info("\n  Stopping sandboxed environment for BOSH tests...")
+        current_sandbox.stop
+        cleanup_sandbox_dir
+      ensure
+        exit(status)
       end
     end
-    event_list
   end
 
-  def start_and_finish_times_for_job_updates(task_id)
-    jobs = {}
-    events(task_id).select do |e|
-      e['stage'] == 'Updating job' && %w(started finished).include?(e['state'])
-    end.each do |e|
-      jobs[e['task']] ||= {}
-      jobs[e['task']][e['state']] = e['time']
-    end
-    jobs
+  def current_sandbox
+    @current_sandbox = Thread.current[:sandbox] || Bosh::Dev::Sandbox::Main.new
+    Thread.current[:sandbox] = @current_sandbox
   end
+
+  def prepare_sandbox
+    cleanup_sandbox_dir
+    setup_test_release_dir
+    setup_bosh_work_dir
+  end
+
+  def reset_sandbox(desc)
+    current_sandbox.reset(desc)
+    FileUtils.rm_rf(current_sandbox.cloud_storage_dir)
+  end
+
+  private
+
+  def setup_test_release_dir
+    FileUtils.cp_r(TEST_RELEASE_TEMPLATE, TEST_RELEASE_DIR, :preserve => true)
+
+    Dir.chdir(TEST_RELEASE_DIR) do
+      ignore = %w(
+        blobs
+        dev-releases
+        config/dev.yml
+        config/private.yml
+        releases/*.tgz
+        dev_releases
+        .dev_builds
+        .final_builds/jobs/**/*.tgz
+        .final_builds/packages/**/*.tgz
+        blobs
+        .blobs
+      )
+
+      File.open('.gitignore', 'w+') do |f|
+        f.write(ignore.join("\n") + "\n")
+      end
+
+      `git init;
+       git config user.name "John Doe";
+       git config user.email "john.doe@example.org";
+       git add .;
+       git commit -m "Initial Test Commit"`
+    end
+  end
+
+  def setup_bosh_work_dir
+    FileUtils.cp_r(BOSH_WORK_TEMPLATE, BOSH_WORK_DIR, :preserve => true)
+  end
+
+  def cleanup_sandbox_dir
+    FileUtils.rm_rf(SANDBOX_DIR)
+    FileUtils.mkdir_p(SANDBOX_DIR)
+  end
+end
+
+module IntegrationSandboxBeforeHelpers
+  def with_reset_sandbox_before_each
+    before do |example|
+      prepare_sandbox
+      start_sandbox
+      unless example.metadata[:no_reset]
+        reset_sandbox(example ? example.metadata[:description] : '')
+      end
+    end
+  end
+
+  def with_reset_sandbox_before_all
+    # `example` is not available in before(:all)
+    before(:all) do
+      prepare_sandbox
+      start_sandbox
+      reset_sandbox('')
+    end
+  end
+end
+
+RSpec.configure do |config|
+  config.include(IntegrationExampleGroup, type: :integration)
+  config.include(IntegrationSandboxHelpers, type: :integration)
+  config.extend(IntegrationSandboxBeforeHelpers, type: :integration)
 end

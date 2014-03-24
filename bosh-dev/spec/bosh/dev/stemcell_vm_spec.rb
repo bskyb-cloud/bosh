@@ -1,5 +1,6 @@
 require 'spec_helper'
 require 'bosh/dev/stemcell_vm'
+require 'bosh/stemcell/build_environment'
 
 module Bosh::Dev
   describe StemcellVm do
@@ -9,6 +10,9 @@ module Bosh::Dev
           vm_name: 'remote',
           infrastructure_name: 'fake-infrastructure_name',
           operating_system_name: 'fake-operating_system_name',
+          agent_name: 'fake-agent_name',
+          os_image_s3_bucket_name: 'fake-bucket',
+          os_image_s3_key: 'fake-key',
         }
       end
 
@@ -17,14 +21,12 @@ module Bosh::Dev
           'CANDIDATE_BUILD_NUMBER' => 'fake-CANDIDATE_BUILD_NUMBER',
           'BOSH_AWS_ACCESS_KEY_ID' => 'fake-BOSH_AWS_ACCESS_KEY_ID',
           'BOSH_AWS_SECRET_ACCESS_KEY' => 'fake-BOSH_AWS_SECRET_ACCESS_KEY',
-          'AWS_ACCESS_KEY_ID_FOR_STEMCELLS_JENKINS_ACCOUNT' =>
-            'fake-AWS_ACCESS_KEY_ID_FOR_STEMCELLS_JENKINS_ACCOUNT',
-          'AWS_SECRET_ACCESS_KEY_FOR_STEMCELLS_JENKINS_ACCOUNT' =>
-            'fake-AWS_SECRET_ACCESS_KEY_FOR_STEMCELLS_JENKINS_ACCOUNT',
         }
       end
 
-      subject(:vm) { StemcellVm.new(options, env) }
+      let(:build_environment) { instance_double('Bosh::Stemcell::BuildEnvironment', stemcell_file: 'fake-stemcell.tgz') }
+
+      subject(:vm) { StemcellVm.new(options, env, build_environment) }
 
       before { Rake::FileUtilsExt.stub(:sh) }
 
@@ -49,30 +51,56 @@ module Bosh::Dev
         vm.publish
       end
 
-      it 'publishes a stemcell inside the VM' do
-        Rake::FileUtilsExt.should_receive(:sh) do |cmd|
-          actual = strip_heredoc(cmd)
+      describe 'publishing the stemcell inside the VM' do
+        def expected_cmd(rake_task_args, stemcell_path)
+          strip_heredoc(<<-BASH)
+            vagrant ssh -c "
+              bash -l -c '
+                set -eu
+                cd /bosh
+                bundle install --local
 
-          expected = strip_heredoc(<<-BASH)
-            time vagrant ssh -c "
-              set -eu
-              cd /bosh
-              bundle install --local
+                export CANDIDATE_BUILD_NUMBER='fake-CANDIDATE_BUILD_NUMBER'
+                export BOSH_AWS_ACCESS_KEY_ID='fake-BOSH_AWS_ACCESS_KEY_ID'
+                export BOSH_AWS_SECRET_ACCESS_KEY='fake-BOSH_AWS_SECRET_ACCESS_KEY'
 
-              export CANDIDATE_BUILD_NUMBER='fake-CANDIDATE_BUILD_NUMBER'
-              export BOSH_AWS_ACCESS_KEY_ID='fake-BOSH_AWS_ACCESS_KEY_ID'
-              export BOSH_AWS_SECRET_ACCESS_KEY='fake-BOSH_AWS_SECRET_ACCESS_KEY'
-              export AWS_ACCESS_KEY_ID_FOR_STEMCELLS_JENKINS_ACCOUNT='fake-AWS_ACCESS_KEY_ID_FOR_STEMCELLS_JENKINS_ACCOUNT'
-              export AWS_SECRET_ACCESS_KEY_FOR_STEMCELLS_JENKINS_ACCOUNT='fake-AWS_SECRET_ACCESS_KEY_FOR_STEMCELLS_JENKINS_ACCOUNT'
-
-              time bundle exec rake ci:publish_stemcell[fake-infrastructure_name,fake-operating_system_name]
+                bundle exec rake stemcell:build[#{rake_task_args}]
+                bundle exec rake ci:publish_stemcell[#{stemcell_path}]
+              '
             " remote
+          BASH
+        end
+
+        it 'publishes a stemcell inside the VM' do
+          Rake::FileUtilsExt.should_receive(:sh) do |cmd|
+            actual = strip_heredoc(cmd)
+            expected = expected_cmd(
+              'fake-infrastructure_name,fake-operating_system_name,fake-agent_name,fake-bucket,fake-key',
+              'fake-stemcell.tgz'
+            )
+
+            expect(actual).to include(expected)
+          end
+
+          vm.publish
+        end
+      end
+
+      it 'cleans up the VM even if something fails' do
+        Rake::FileUtilsExt.should_receive(:sh) do |cmd|
+          raise 'BANG' if cmd =~ /rake ci:publish_stemcell/
+
+          actual = strip_heredoc(cmd)
+          expected = strip_heredoc(<<-BASH)
+            set -eu
+            cd bosh-stemcell
+            vagrant destroy remote --force
           BASH
 
           expect(actual).to include(expected)
-        end
+        end.twice
 
-        vm.publish
+        expect { vm.publish }.to raise_error('BANG')
       end
 
       context 'when the UBUNTU_ISO is (optionally) specified' do

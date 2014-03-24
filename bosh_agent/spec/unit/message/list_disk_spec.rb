@@ -12,7 +12,8 @@ describe Bosh::Agent::Message::ListDisk do
     platform = double(:platform)
     Bosh::Agent::Config.stub(:platform).and_return(platform)
     platform.stub(:lookup_disk_by_cid).and_return("/dev/sdy")
-    Bosh::Agent::DiskUtil.stub(:mount_entry).and_return('/dev/sdy1 /foomount fstype')
+    platform.stub(:is_disk_blockdev?).and_return("true")
+    Bosh::Agent::DiskUtil.stub(:mount_entry).and_return('/dev/sdy1 on /foomount type fstype')
 
     settings = { "disks" => { "persistent" => { 199 => 2 }}}
     Bosh::Agent::Config.settings = settings

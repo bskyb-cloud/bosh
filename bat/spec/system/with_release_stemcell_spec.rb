@@ -1,19 +1,10 @@
 require 'system/spec_helper'
 
 describe 'with release and stemcell and two deployments' do
-  let(:deployed_regexp) { /Deployed \`.*' to \`.*'/ }
-
   before(:all) do
-    requirement previous_release
-    requirement release
-    requirement stemcell
+    @requirements.requirement(@requirements.release)
+    @requirements.requirement(@requirements.stemcell)
     load_deployment_spec
-  end
-
-  after(:all) do
-    cleanup release
-    cleanup previous_release
-    cleanup stemcell
   end
 
   context 'first deployment' do
@@ -32,11 +23,11 @@ describe 'with release and stemcell and two deployments' do
 
       use_persistent_disk(2048)
 
-      @first_deployment_result = requirement deployment
+      @first_deployment_result = @requirements.requirement(deployment, @spec)
     end
 
     after(:all) do
-      cleanup deployment
+      @requirements.cleanup(deployment)
     end
 
     it 'should set vcap password', ssh: true do
@@ -44,21 +35,25 @@ describe 'with release and stemcell and two deployments' do
     end
 
     it 'should not change the deployment on a noop' do
+      pending 'pending this temporary due to flaky bat release' if warden?
       deployment_result = bosh('deploy')
       events(get_task_id(deployment_result.output)).each do |event|
-        event['stage'].should_not match /^Updating/
+        if event['stage']
+          expect(event['stage']).to_not match(/^Updating/)
+        end
       end
     end
 
     it 'should do two deployments from one release' do
       pending "This fails on AWS VPC because use_static_ip only sets the eip but doesn't prevent collision" if aws?
       pending "This fails on OpenStack because use_static_ip only sets the floating IP but doesn't prevent collision" if openstack?
+      pending "This fails on Warden because use_static_ip only sets the floating IP but doesn't prevent collision" if warden?
 
       # second deployment can't use static IP or there will be a collision with the first deployment
       no_static_ip
       use_deployment_name('bat2')
       with_deployment do
-        deployments.should include('bat2')
+        @bosh_api.deployments.should include('bat2')
       end
       # Not sure why these are necessary since the before(:all) should call them
       # before setting up future deployments. But without these, the state leaks
@@ -69,14 +64,15 @@ describe 'with release and stemcell and two deployments' do
 
     it 'should use job colocation', ssh: true do
       @jobs.each do |job|
-        grep = "pgrep -lf #{job}"
-        ssh(static_ip, 'vcap', grep, @our_ssh_options).should match /#{job}/
+        grep_cmd = "pgrep -lf #{job}"
+        ssh(static_ip, 'vcap', grep_cmd, @our_ssh_options).should match /#{job}/
       end
     end
 
     it 'should deploy using a static network', ssh: true do
       pending "doesn't work on AWS as the VIP IP isn't visible to the VM" if aws?
       pending "doesn't work on OpenStack as the VIP IP isn't visible to the VM" if openstack?
+      pending "doesn't work on Warden as the VIP IP isn't visible to eth0" if warden?
       ssh(static_ip, 'vcap', '/sbin/ifconfig eth0', @our_ssh_options).should match /#{static_ip}/
     end
 
@@ -85,13 +81,16 @@ describe 'with release and stemcell and two deployments' do
 
       before(:all) do
         ssh(static_ip, 'vcap', "echo 'foobar' > #{SAVE_FILE}", @our_ssh_options)
-        @size = persistent_disk(static_ip)
+        @size = persistent_disk(static_ip, 'vcap', @our_ssh_options)
         use_persistent_disk(4096)
-        @second_deployment_result = requirement deployment
+        @second_deployment_result = @requirements.requirement(deployment, @spec, force: true)
       end
 
       it 'should migrate disk contents', ssh: true do
-        persistent_disk(static_ip).should_not eq(@size)
+        # Warden df don't work so skip the persistent disk size check
+        unless warden?
+          persistent_disk(static_ip, 'vcap', @our_ssh_options).should_not eq(@size)
+        end
         ssh(static_ip, 'vcap', "cat #{SAVE_FILE}", @our_ssh_options).should match /foobar/
       end
 

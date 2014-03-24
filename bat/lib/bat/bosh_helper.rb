@@ -1,64 +1,27 @@
-# Copyright (c) 2012 VMware, Inc.
-
 require 'httpclient'
 require 'json'
 require 'net/ssh'
 require 'zlib'
 require 'archive/tar/minitar'
 require 'tempfile'
-
 require 'common/exec'
 
 module Bat
   module BoshHelper
     include Archive::Tar
 
-    DEFAULT_POLL_INTERVAL = 1
-
-    def bosh(arguments, options = {})
-      poll_interval = options[:poll_interval] || DEFAULT_POLL_INTERVAL
-      command = "#{bosh_bin} --non-interactive " +
-        "-P #{poll_interval} " +
-        "--config #{BoshHelper.bosh_cli_config_path} " +
-        '--user admin --password admin ' +
-        "#{arguments} 2>&1"
-      puts("--> #{command}")
-      begin
-        result = Bosh::Exec.sh(command, options)
-      rescue Bosh::Exec::Error => e
-        puts("Bosh command failed: #{e.output}")
-        raise
-      end
-      puts(result.output)
-      yield result if block_given?
-      result
+    def bosh(*args, &blk)
+      @bosh_runner.bosh(*args, &blk)
     end
 
-    def bosh_safe(command, options = {})
-      bosh(command, options.merge(on_error: :return))
-    end
-
-    def self.bosh_cli_config_path
-      @bosh_cli_config_tempfile ||= Tempfile.new('bosh_config')
-      @bosh_cli_config_tempfile.path
-    end
-
-    def bosh_bin
-      BoshHelper.read_environment('BAT_BOSH_BIN', 'bundle exec bosh')
-    end
-
-    def bosh_director
-      BoshHelper.read_environment('BAT_DIRECTOR')
-    end
-
-    def password
-      BoshHelper.read_environment('BAT_VCAP_PASSWORD')
+    def bosh_safe(*args, &blk)
+      @bosh_runner.bosh_safe(*args, &blk)
     end
 
     def ssh_options
       {
-        private_key: private_key,
-        password: password
+        private_key: ENV['BAT_VCAP_PRIVATE_KEY'],
+        password: @env.vcap_password
       }
     end
 
@@ -66,46 +29,35 @@ module Bat
       ENV['BAT_DNS_HOST']
     end
 
-    def jbosh(path)
-      body = http_client.get([director_url, path].join, 'application/json').body
-      JSON.parse(body)
-    end
-
     def aws?
-      info['cpi'] == 'aws'
+      @bosh_api.info['cpi'] == 'aws'
     end
 
     def openstack?
-      info['cpi'] == 'openstack'
+      @bosh_api.info['cpi'] == 'openstack'
+    end
+
+    def warden?
+      @bosh_api.info['cpi'] == 'warden'
     end
 
     def compiled_package_cache?
+      info = @bosh_api.info
       info['features'] && info['features']['compiled_package_cache']
     end
 
     def dns?
-      info['features'] && info['features']['dns']
+      info = @bosh_api.info
+      info['features'] && info['features']['dns']['status']
     end
 
     def bosh_tld
+      info = @bosh_api.info
       info['features']['dns']['extras']['domain_name'] if dns?
     end
 
-    def tasks_processing?
-      # `bosh tasks` exit code is 1 if no tasks running
-      bosh('tasks', on_error: :return).output =~ /\| processing \|/
-    end
-
-    def self.read_environment(variable, default = nil)
-      ENV.fetch(variable) do |v|
-        return default if default
-        raise "#{v} not set"
-      end
-    end
-
-    def persistent_disk(host)
-      disks = get_json("http://#{host}:4567/disks")
-      disks.each do |disk|
+    def persistent_disk(host, user, options = {})
+      get_disks(host, user, options).each do |disk|
         values = disk.last
         if disk.last['mountpoint'] == '/var/vcap/store'
           return values['blocks']
@@ -125,6 +77,8 @@ module Bat
       if options[:keys].nil? && options[:password].nil?
         raise 'need to set ssh :password, :keys, or :private_key'
       end
+
+      @logger.info("SSH host=#{host} user=#{user} options=#{options.inspect}")
 
       Net::SSH.start(host, user, options) do |ssh|
         output = ssh.exec!(command)
@@ -150,17 +104,20 @@ module Bat
     end
 
     def wait_for_vm(name)
+      @logger.info("Start waiting for vm #{name}")
+      vm = nil
       5.times do
         vm = get_vms.find { |v| v[:job_index] == name }
-        return vm if vm
+        break if vm
       end
-      nil
+      @logger.info("Finished waiting for vm #{name} vm=#{vm.inspect}")
+      vm
     end
 
     private
 
     def get_vms
-      output = bosh('vms --details').output
+      output = @bosh_runner.bosh('vms --details').output
       table = output.lines.grep(/\|/)
 
       table = table.map { |line| line.split('|').map(&:strip).reject(&:empty?) }
@@ -175,41 +132,23 @@ module Bat
       output
     end
 
-    def private_key
-      ENV['BAT_VCAP_PRIVATE_KEY']
-    end
+    def get_disks(host, user, options)
+      disks = {}
+      df_cmd = 'df -x tmpfs -x devtmpfs -x debugfs -l | tail -n +2'
 
-    def http_client
-      return @bosh if @bosh
-      @bosh = HTTPClient.new
-      @bosh.ssl_config.verify_mode = OpenSSL::SSL::VERIFY_NONE
-      @bosh.set_auth(director_url, 'admin', 'admin')
-      @bosh
-    end
-
-    def director_url
-      "https://#{bosh_director}:25555"
-    end
-
-    def info
-      jbosh('/info')
-    end
-    # this method will retry a bunch of times, as when it is used to
-    # get json from a new batarang job, it may not have started when
-    # it we call it
-    def get_json(url, max_times = 120)
-      client = HTTPClient.new
-      tries = 0
-      begin
-        body = client.get(url, 'application/json').body
-      rescue Errno::ECONNREFUSED => e
-        raise e if tries == max_times
-        sleep(1)
-        tries += 1
-        retry
+      df_output = ssh(host, user, df_cmd, options)
+      df_output.split("\n").each do |line|
+        fields = line.split(/\s+/)
+        disks[fields[0]] = {
+          blocks: fields[1],
+          used: fields[2],
+          available: fields[3],
+          percent: fields[4],
+          mountpoint: fields[5],
+        }
       end
 
-      JSON.parse(body)
+      disks
     end
   end
 end

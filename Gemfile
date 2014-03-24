@@ -12,15 +12,14 @@ gemspec path: 'bosh_cpi'
 gemspec path: 'bosh_cli'
 gemspec path: 'bosh_cli_plugin_aws'
 gemspec path: 'bosh_cli_plugin_micro'
-gemspec path: 'bosh_encryption'
 gemspec path: 'bosh_openstack_cpi'
-gemspec path: 'bosh_registry'
+gemspec path: 'bosh-registry'
 gemspec path: 'bosh_vsphere_cpi'
 gemspec path: 'bosh_warden_cpi'
-gemspec path: 'director'
-gemspec path: 'health_monitor'
-gemspec path: 'package_compiler'
-gemspec path: 'ruby_vim_sdk'
+gemspec path: 'bosh-director'
+gemspec path: 'bosh-director-core'
+gemspec path: 'bosh-monitor'
+gemspec path: 'bosh-release'
 gemspec path: 'simple_blobstore_server'
 
 gem 'rake', '~>10.0'
@@ -34,7 +33,6 @@ end
 
 group :development do
   gem 'ruby_gntp'
-  gem 'debugger' if RUBY_VERSION < '2.0.0'
   gem 'git-duet', require: false
 end
 
@@ -49,19 +47,24 @@ group :development, :test do
   gemspec path: 'bosh-dev'
   gemspec path: 'bosh-stemcell'
 
+  gem 'rspec', '3.0.0.beta1'
+  gem 'rspec-its'
+  gem 'rspec-instafail'
+
   gem 'rubocop', require: false
   gem 'parallel_tests'
   gem 'rack-test'
-  gem 'guard'
-  gem 'guard-bundler'
-  gem 'guard-rspec'
   gem 'ci_reporter'
-  gem 'rspec'
-  gem 'rspec-fire'
   gem 'webmock'
   gem 'fakefs'
   gem 'simplecov'
   gem 'simplecov-rcov'
+  gem 'vcr'
+
+  # Explicitly do not require serverspec dependency
+  # so that it could be monkey patched in a deterministic way
+  # in `bosh-stemcell/spec/support/serverspec.rb`
+  gem 'specinfra', require: nil
 
   # for director
   gem 'machinist', '~>1.0'

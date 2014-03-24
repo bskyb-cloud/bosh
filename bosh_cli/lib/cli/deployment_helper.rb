@@ -61,6 +61,8 @@ module Bosh::Cli
       resolve_release_aliases(manifest)
       resolve_stemcell_aliases(manifest)
 
+      report_manifest_warnings(manifest)
+
       options[:yaml] ? Psych.dump(manifest) : manifest
     end
 
@@ -231,7 +233,7 @@ module Bosh::Cli
 
     def job_unique_in_deployment?(job_name)
       job = find_job(job_name)
-      job.fetch('instances') == 1 if job
+      job ? job.fetch('instances') == 1 : false
     end
 
     def job_exists_in_deployment?(job_name)
@@ -299,12 +301,14 @@ module Bosh::Cli
       title ||= key.to_s.gsub(/[-_]/, ' ').capitalize
 
       say(title.make_green)
-      summary = diff[key].summary
-      if summary.empty?
+
+      summary = diff[key] && diff[key].summary
+      if !summary || summary.empty?
         say('No changes')
       else
         say(summary.join("\n"))
       end
+
       @_diff_key_visited[key.to_s] = 1
     end
 
@@ -372,6 +376,10 @@ module Bosh::Cli
           hash
         end
       end
+    end
+
+    def report_manifest_warnings(manifest)
+      ManifestWarnings.new(manifest).report
     end
   end
 end

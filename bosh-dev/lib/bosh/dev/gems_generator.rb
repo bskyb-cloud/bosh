@@ -1,17 +1,14 @@
 require 'bosh/dev'
-require 'bosh/dev/version_file'
 require 'bosh/dev/gem_components'
 
 module Bosh::Dev
   class GemsGenerator
     def initialize(build)
       @build = build
-      @components = GemComponents.new
+      @components = GemComponents.new(build.number)
     end
 
     def generate_and_upload
-      VersionFile.new(@build.number).write
-
       @components.build_release_gems
 
       Dir.chdir('pkg') do
