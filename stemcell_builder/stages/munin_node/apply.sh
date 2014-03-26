@@ -19,11 +19,11 @@ debs="munin-node"
 pkg_mgr install $debs
 
 # now make the directory with the correct permissions
-run_in_chroot $chroot mkdir -p /var/run/munin
-run_in_chroot $chroot chown root:root /var/run/munin
-run_in_chroot $chroot chmod 644 /var/run/munin
+run_in_chroot $chroot "mkdir -p /var/run/munin"
+run_in_chroot $chroot "chown root:root /var/run/munin"
+run_in_chroot $chroot "chmod 644 /var/run/munin"
 
 # remove all of the currently linked in munin plugins
-run_in_chroot $chroot rm /etc/munin/plugins/*
-run_in_chroot $chroot rm /etc/munin/plugin-conf.d/*
-run_in_chroot $chroot rm /etc/munin/munin-node.conf
+run_in_chroot $chroot "rm /etc/munin/plugins/*"
+run_in_chroot $chroot "rm /etc/munin/plugin-conf.d/*"
+run_in_chroot $chroot "rm /etc/munin/munin-node.conf"
