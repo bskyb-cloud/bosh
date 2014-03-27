@@ -227,8 +227,10 @@ module Bosh::Stemcell
         # Finalisation
         :bosh_clean,
         :bosh_harden,
+        # customisations
+        :munin_node,
+        :root_certificate,
         # Image/bootloader
-	:munin_node,
         :image_create,
         :image_install_grub,
         :image_ovf_vmx,
@@ -266,7 +268,9 @@ module Bosh::Stemcell
         # Finalisation
         :bosh_clean,
         :bosh_harden,
-	:munin_node,
+        # customisations
+        :munin_node,
+        :root_certificate,
         :bosh_dpkg_list,
         # Image copy
         :bosh_copy_root,
