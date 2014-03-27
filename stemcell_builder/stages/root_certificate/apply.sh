@@ -16,5 +16,5 @@ run_in_chroot $chroot "sudo mkdir /usr/share/ca-certificates/extra"
 # copy the certificate
 cp $assets_dir/bskyb-dev-ca.crt $chroot/usr/share/ca-certificates/extra/bskyb-dev-ca.crt
 # reconfigure
-run_in_chroot $chroot "sudo dpkg-reconfigure ca-certificates"
+run_in_chroot $chroot "sudo dpkg-reconfigure -f noninteractive ca-certificates"
 
