@@ -8,12 +8,12 @@ type TaskState string
 
 const (
 	TaskStateRunning TaskState = "running"
-	TaskStateDone              = "done"
-	TaskStateFailed            = "failed"
+	TaskStateDone    TaskState = "done"
+	TaskStateFailed  TaskState = "failed"
 )
 
 type Task struct {
-	Id    string
+	ID    string
 	State TaskState
 	Value interface{}
 	Error error
@@ -23,6 +23,6 @@ type Task struct {
 }
 
 type TaskStateValue struct {
-	AgentTaskId string    `json:"agent_task_id"`
+	AgentTaskID string    `json:"agent_task_id"`
 	State       TaskState `json:"state"`
 }

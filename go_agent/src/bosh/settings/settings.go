@@ -1,21 +1,21 @@
 package settings
 
 const (
-	ROOT_USERNAME         = "root"
-	VCAP_USERNAME         = "vcap"
-	ADMIN_GROUP           = "admin"
-	EPHEMERAL_USER_PREFIX = "bosh_"
+	RootUsername        = "root"
+	VCAPUsername        = "vcap"
+	AdminGroup          = "admin"
+	EphemeralUserPrefix = "bosh_"
 )
 
 type Settings struct {
-	AgentId   string `json:"agent_id"`
-	Blobstore Blobstore
-	Disks     Disks
-	Env       Env
-	Networks  Networks
-	Ntp       []string
-	Mbus      string
-	Vm        Vm
+	AgentID   string    `json:"agent_id"`
+	Blobstore Blobstore `json:"blobstore"`
+	Disks     Disks     `json:"disks"`
+	Env       Env       `json:"env"`
+	Networks  Networks  `json:"networks"`
+	Ntp       []string  `json:"ntp"`
+	Mbus      string    `json:"mbus"`
+	VM        VM        `json:"vm"`
 }
 
 const (
@@ -24,17 +24,17 @@ const (
 )
 
 type Blobstore struct {
-	Type    string `json:"provider"`
-	Options map[string]string
+	Type    string            `json:"provider"`
+	Options map[string]string `json:"options"`
 }
 
 type Disks struct {
-	System     string
-	Ephemeral  string
-	Persistent map[string]string
+	System     string            `json:"system"`
+	Ephemeral  string            `json:"ephemeral"`
+	Persistent map[string]string `json:"persistent"`
 }
 
-type Vm struct {
+type VM struct {
 	Name string `json:"name"`
 }
 
@@ -54,18 +54,18 @@ func (e Env) GetPassword() string {
 }
 
 type BoshEnv struct {
-	Password string
+	Password string `json:"password"`
 }
 
 type Networks map[string]Network
 
 type Network struct {
-	Default []string
-	Dns     []string
-	Ip      string
-	Netmask string
-	Gateway string
-	Mac     string
+	Default []string `json:"default"`
+	DNS     []string `json:"dns"`
+	IP      string   `json:"ip"`
+	Netmask string   `json:"netmask"`
+	Gateway string   `json:"gateway"`
+	Mac     string   `json:"mac"`
 }
 
 func (n Networks) DefaultNetworkFor(category string) (network Network, found bool) {
@@ -92,13 +92,13 @@ func (n Networks) DefaultNetworkFor(category string) (network Network, found boo
 	return
 }
 
-func (n Networks) DefaultIp() (ip string, found bool) {
+func (n Networks) DefaultIP() (ip string, found bool) {
 	for _, networkSettings := range n {
 		if ip == "" {
-			ip = networkSettings.Ip
+			ip = networkSettings.IP
 		}
 		if len(networkSettings.Default) > 0 {
-			ip = networkSettings.Ip
+			ip = networkSettings.IP
 		}
 	}
 
@@ -108,10 +108,10 @@ func (n Networks) DefaultIp() (ip string, found bool) {
 	return
 }
 
-func (n Networks) Ips() (ips []string) {
+func (n Networks) IPs() (ips []string) {
 	for _, net := range n {
-		if net.Ip != "" {
-			ips = append(ips, net.Ip)
+		if net.IP != "" {
+			ips = append(ips, net.IP)
 		}
 	}
 	return

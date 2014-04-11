@@ -1,12 +1,11 @@
 package disk
 
 import (
-	bosherr "bosh/errors"
-	boshsys "bosh/system"
-	"errors"
-	"fmt"
 	"strings"
 	"time"
+
+	bosherr "bosh/errors"
+	boshsys "bosh/system"
 )
 
 type linuxMounter struct {
@@ -38,7 +37,7 @@ func (m linuxMounter) Mount(partitionPath, mountPoint string, mountOptions ...st
 	mountArgs := []string{partitionPath, mountPoint}
 	mountArgs = append(mountArgs, mountOptions...)
 
-	_, _, err = m.runner.RunCommand("mount", mountArgs...)
+	_, _, _, err = m.runner.RunCommand("mount", mountArgs...)
 	if err != nil {
 		err = bosherr.WrapError(err, "Shelling out to mount")
 	}
@@ -67,7 +66,7 @@ func (m linuxMounter) Remount(fromMountPoint, toMountPoint string, mountOptions 
 }
 
 func (m linuxMounter) SwapOn(partitionPath string) (err error) {
-	out, _, _ := m.runner.RunCommand("swapon", "-s")
+	out, _, _, _ := m.runner.RunCommand("swapon", "-s")
 
 	for i, swapOnLines := range strings.Split(out, "\n") {
 		swapOnFields := strings.Fields(swapOnLines)
@@ -82,7 +81,7 @@ func (m linuxMounter) SwapOn(partitionPath string) (err error) {
 		}
 	}
 
-	_, _, err = m.runner.RunCommand("swapon", partitionPath)
+	_, _, _, err = m.runner.RunCommand("swapon", partitionPath)
 	if err != nil {
 		err = bosherr.WrapError(err, "Shelling out to swapon")
 	}
@@ -95,11 +94,11 @@ func (m linuxMounter) Unmount(partitionOrMountPoint string) (didUnmount bool, er
 		return
 	}
 
-	_, _, err = m.runner.RunCommand("umount", partitionOrMountPoint)
+	_, _, _, err = m.runner.RunCommand("umount", partitionOrMountPoint)
 
 	for i := 1; i < m.maxUnmountRetries && err != nil; i++ {
 		time.Sleep(m.unmountRetrySleep)
-		_, _, err = m.runner.RunCommand("umount", partitionOrMountPoint)
+		_, _, _, err = m.runner.RunCommand("umount", partitionOrMountPoint)
 	}
 
 	didUnmount = err == nil
@@ -144,12 +143,12 @@ func (m linuxMounter) shouldMount(partitionPath, mountPoint string) (shouldMount
 			found = true
 			return
 		case mountedPartitionPath == partitionPath && mountedMountPoint != mountPoint:
-			err = errors.New(fmt.Sprintf("Device %s is already mounted to %s, can't mount to %s",
-				mountedPartitionPath, mountedMountPoint, mountPoint))
+			err = bosherr.New("Device %s is already mounted to %s, can't mount to %s",
+				mountedPartitionPath, mountedMountPoint, mountPoint)
 			return
 		case mountedMountPoint == mountPoint:
-			err = errors.New(fmt.Sprintf("Device %s is already mounted to %s, can't mount %s",
-				mountedPartitionPath, mountedMountPoint, partitionPath))
+			err = bosherr.New("Device %s is already mounted to %s, can't mount %s",
+				mountedPartitionPath, mountedMountPoint, partitionPath)
 			return
 		}
 

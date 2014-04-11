@@ -1,13 +1,15 @@
 package app_test
 
 import (
-	. "bosh/davcli/app"
-	davconf "bosh/davcli/config"
 	"errors"
-	. "github.com/onsi/ginkgo"
-	"github.com/stretchr/testify/assert"
 	"os"
 	"path/filepath"
+
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
+
+	. "bosh/davcli/app"
+	davconf "bosh/davcli/config"
 )
 
 type FakeRunner struct {
@@ -32,6 +34,7 @@ func pathToFixture(file string) string {
 	absPath, _ := filepath.Abs(fixturePath)
 	return absPath
 }
+
 func init() {
 	Describe("Testing with Ginkgo", func() {
 		It("runs the put command", func() {
@@ -39,7 +42,7 @@ func init() {
 
 			app := New(runner)
 			err := app.Run([]string{"dav-cli", "-c", pathToFixture("dav-cli-config.json"), "put", "localFile", "remoteFile"})
-			assert.NoError(GinkgoT(), err)
+			Expect(err).ToNot(HaveOccurred())
 
 			expectedConfig := davconf.Config{
 				User:     "some user",
@@ -47,30 +50,28 @@ func init() {
 				Endpoint: "http://example.com/some/endpoint",
 			}
 
-			assert.Equal(GinkgoT(), runner.Config, expectedConfig)
-			assert.Equal(GinkgoT(), runner.RunArgs, []string{"put", "localFile", "remoteFile"})
+			Expect(runner.Config).To(Equal(expectedConfig))
+			Expect(runner.RunArgs).To(Equal([]string{"put", "localFile", "remoteFile"}))
 		})
-		It("returns error with no config argument", func() {
 
+		It("returns error with no config argument", func() {
 			runner := &FakeRunner{}
 
 			app := New(runner)
 			err := app.Run([]string{"put", "localFile", "remoteFile"})
-
-			assert.Error(GinkgoT(), err)
-			assert.Contains(GinkgoT(), err.Error(), "Config file arg `-c` is missing")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("Config file arg `-c` is missing"))
 		})
-		It("returns error from the cmd runner", func() {
 
+		It("returns error from the cmd runner", func() {
 			runner := &FakeRunner{
-				RunErr: errors.New("Oops"),
+				RunErr: errors.New("fake-run-error"),
 			}
 
 			app := New(runner)
 			err := app.Run([]string{"dav-cli", "-c", pathToFixture("dav-cli-config.json"), "put", "localFile", "remoteFile"})
-
-			assert.Error(GinkgoT(), err)
-			assert.Equal(GinkgoT(), err, runner.RunErr)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("fake-run-error"))
 		})
 	})
 }

@@ -1,6 +1,8 @@
 package fakes
 
-import boshjobsup "bosh/jobsupervisor"
+import (
+	boshjobsuper "bosh/jobsupervisor"
+)
 
 type FakeJobSupervisor struct {
 	Reloaded  bool
@@ -8,15 +10,21 @@ type FakeJobSupervisor struct {
 
 	AddJobArgs []AddJobArgs
 
+	RemovedAllJobs    bool
+	RemovedAllJobsErr error
+
 	Started  bool
 	StartErr error
 
 	Stopped bool
 	StopErr error
 
+	Unmonitored  bool
+	UnmonitorErr error
+
 	StatusStatus string
 
-	OnJobFailure boshjobsup.JobFailureHandler
+	OnJobFailure boshjobsuper.JobFailureHandler
 }
 
 type AddJobArgs struct {
@@ -25,45 +33,50 @@ type AddJobArgs struct {
 	ConfigPath string
 }
 
-func NewFakeJobSupervisor() (jobSupervisor *FakeJobSupervisor) {
-	jobSupervisor = &FakeJobSupervisor{}
-	return
+func NewFakeJobSupervisor() *FakeJobSupervisor {
+	return &FakeJobSupervisor{}
 }
 
-func (m *FakeJobSupervisor) Reload() (err error) {
+func (m *FakeJobSupervisor) Reload() error {
 	m.Reloaded = true
-	err = m.ReloadErr
-	return
+	return m.ReloadErr
 }
 
-func (m *FakeJobSupervisor) AddJob(jobName string, jobIndex int, configPath string) (err error) {
+func (m *FakeJobSupervisor) AddJob(jobName string, jobIndex int, configPath string) error {
 	args := AddJobArgs{
 		Name:       jobName,
 		Index:      jobIndex,
 		ConfigPath: configPath,
 	}
 	m.AddJobArgs = append(m.AddJobArgs, args)
-	return
+	return nil
 }
 
-func (m *FakeJobSupervisor) Start() (err error) {
+func (m *FakeJobSupervisor) RemoveAllJobs() error {
+	m.RemovedAllJobs = true
+	return m.RemovedAllJobsErr
+}
+
+func (m *FakeJobSupervisor) Start() error {
 	m.Started = true
-	err = m.StartErr
-	return
+	return m.StartErr
 }
 
-func (m *FakeJobSupervisor) Stop() (err error) {
+func (m *FakeJobSupervisor) Stop() error {
 	m.Stopped = true
-	err = m.StopErr
-	return
+	return m.StopErr
 }
 
-func (m *FakeJobSupervisor) Status() (status string) {
-	status = m.StatusStatus
-	return
+func (m *FakeJobSupervisor) Unmonitor() error {
+	m.Unmonitored = true
+	return m.UnmonitorErr
 }
 
-func (m *FakeJobSupervisor) MonitorJobFailures(handler boshjobsup.JobFailureHandler) (err error) {
+func (m *FakeJobSupervisor) Status() string {
+	return m.StatusStatus
+}
+
+func (m *FakeJobSupervisor) MonitorJobFailures(handler boshjobsuper.JobFailureHandler) error {
 	m.OnJobFailure = handler
-	return
+	return nil
 }

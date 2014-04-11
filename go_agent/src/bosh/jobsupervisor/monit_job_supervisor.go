@@ -1,17 +1,18 @@
 package jobsupervisor
 
 import (
+	"fmt"
+	"path/filepath"
+	"time"
+
+	"github.com/pivotal/go-smtpd/smtpd"
+
 	boshalert "bosh/agent/alert"
 	bosherr "bosh/errors"
 	boshmonit "bosh/jobsupervisor/monit"
 	boshlog "bosh/logger"
 	boshdir "bosh/settings/directories"
 	boshsys "bosh/system"
-	"fmt"
-	"github.com/pivotal/go-smtpd/smtpd"
-	"path/filepath"
-	"time"
-	//	"strconv"
 )
 
 type monitJobSupervisor struct {
@@ -113,6 +114,23 @@ func (m monitJobSupervisor) Stop() (err error) {
 	return
 }
 
+func (m monitJobSupervisor) Unmonitor() error {
+	services, err := m.client.ServicesInGroup("vcap")
+	if err != nil {
+		return bosherr.WrapError(err, "Getting vcap services")
+	}
+
+	for _, service := range services {
+		err := m.client.UnmonitorService(service)
+		if err != nil {
+			return bosherr.WrapError(err, "Unmonitoring service %s", service)
+		}
+		m.logger.Debug(MonitTag, "Unmonitoring service %s", service)
+	}
+
+	return nil
+}
+
 func (m monitJobSupervisor) Status() (status string) {
 	status = "running"
 	monitStatus, err := m.client.Status()
@@ -141,21 +159,25 @@ func (m monitJobSupervisor) getIncarnation() (int, error) {
 	return monitStatus.GetIncarnation()
 }
 
-func (m monitJobSupervisor) AddJob(jobName string, jobIndex int, configPath string) (err error) {
+func (m monitJobSupervisor) AddJob(jobName string, jobIndex int, configPath string) error {
 	targetFilename := fmt.Sprintf("%04d_%s.monitrc", jobIndex, jobName)
 	targetConfigPath := filepath.Join(m.dirProvider.MonitJobsDir(), targetFilename)
 
 	configContent, err := m.fs.ReadFile(configPath)
 	if err != nil {
-		err = bosherr.WrapError(err, "Reading job config from file")
-		return
+		return bosherr.WrapError(err, "Reading job config from file")
 	}
 
 	err = m.fs.WriteFile(targetConfigPath, configContent)
 	if err != nil {
-		err = bosherr.WrapError(err, "Writing to job config file")
+		return bosherr.WrapError(err, "Writing to job config file")
 	}
-	return
+
+	return nil
+}
+
+func (m monitJobSupervisor) RemoveAllJobs() error {
+	return m.fs.RemoveAll(m.dirProvider.MonitJobsDir())
 }
 
 func (m monitJobSupervisor) MonitorJobFailures(handler JobFailureHandler) (err error) {

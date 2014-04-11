@@ -2,6 +2,7 @@ package action_test
 
 import (
 	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/assert"
 
 	. "bosh/agent/action"
@@ -14,7 +15,7 @@ import (
 
 func testSshSetupWithGivenPassword(t assert.TestingT, expectedPwd string) {
 	settings := &fakesettings.FakeSettingsService{}
-	settings.DefaultIp = "ww.xx.yy.zz"
+	settings.DefaultIP = "ww.xx.yy.zz"
 
 	platform, action := buildSshAction(settings)
 
@@ -33,16 +34,16 @@ func testSshSetupWithGivenPassword(t assert.TestingT, expectedPwd string) {
 	assert.Equal(t, expectedUser, platform.CreateUserUsername)
 	assert.Equal(t, expectedPwd, platform.CreateUserPassword)
 	assert.Equal(t, "/foo/bosh_ssh", platform.CreateUserBasePath)
-	assert.Equal(t, []string{boshsettings.VCAP_USERNAME, boshsettings.ADMIN_GROUP}, platform.AddUserToGroupsGroups[expectedUser])
+	assert.Equal(t, []string{boshsettings.VCAPUsername, boshsettings.AdminGroup}, platform.AddUserToGroupsGroups[expectedUser])
 	assert.Equal(t, expectedKey, platform.SetupSshPublicKeys[expectedUser])
 
-	expectedJson := map[string]interface{}{
+	expectedJSON := map[string]interface{}{
 		"command": "setup",
 		"status":  "success",
 		"ip":      "ww.xx.yy.zz",
 	}
 
-	boshassert.MatchesJsonMap(t, response, expectedJson)
+	boshassert.MatchesJSONMap(t, response, expectedJSON)
 }
 
 func buildSshAction(settings boshsettings.Service) (*fakeplatform.FakePlatform, SshAction) {
@@ -55,13 +56,13 @@ func init() {
 		It("ssh should be synchronous", func() {
 			settings := &fakesettings.FakeSettingsService{}
 			_, action := buildSshAction(settings)
-			assert.False(GinkgoT(), action.IsAsynchronous())
+			Expect(action.IsAsynchronous()).To(BeFalse())
 		})
 
 		It("is not persistent", func() {
 			settings := &fakesettings.FakeSettingsService{}
 			_, action := buildSshAction(settings)
-			assert.False(GinkgoT(), action.IsPersistent())
+			Expect(action.IsPersistent()).To(BeFalse())
 		})
 
 		It("ssh setup without default ip", func() {
@@ -75,8 +76,8 @@ func init() {
 				PublicKey: "some-key",
 			}
 			_, err := action.Run("setup", params)
-			assert.Error(GinkgoT(), err)
-			assert.Contains(GinkgoT(), err.Error(), "No default ip")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("No default ip"))
 		})
 		It("ssh setup with username and password", func() {
 
@@ -93,10 +94,10 @@ func init() {
 
 			params := SshParams{UserRegex: "^foobar.*"}
 			response, err := action.Run("cleanup", params)
-			assert.NoError(GinkgoT(), err)
-			assert.Equal(GinkgoT(), "^foobar.*", platform.DeleteEphemeralUsersMatchingRegex)
+			Expect(err).ToNot(HaveOccurred())
+			Expect("^foobar.*").To(Equal(platform.DeleteEphemeralUsersMatchingRegex))
 
-			boshassert.MatchesJsonMap(GinkgoT(), response, map[string]interface{}{
+			boshassert.MatchesJSONMap(GinkgoT(), response, map[string]interface{}{
 				"command": "cleanup",
 				"status":  "success",
 			})

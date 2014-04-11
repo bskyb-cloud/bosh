@@ -52,14 +52,14 @@ func (dispatcher concreteActionDispatcher) ResumePreviouslyDispatchedTasks() {
 		action, err := dispatcher.actionFactory.Create(taskInfo.Method)
 		if err != nil {
 			dispatcher.logger.Error("Action Dispatcher", "Unknown action %s", taskInfo.Method)
-			dispatcher.taskManager.RemoveTaskInfo(taskInfo.TaskId)
+			dispatcher.taskManager.RemoveTaskInfo(taskInfo.TaskID)
 			continue
 		}
 
-		taskId := taskInfo.TaskId
+		taskID := taskInfo.TaskID
 		payload := taskInfo.Payload
 
-		task := dispatcher.taskService.CreateTaskWithId(taskId, func() (interface{}, error) {
+		task := dispatcher.taskService.CreateTaskWithID(taskID, func() (interface{}, error) {
 			return dispatcher.actionRunner.Resume(action, payload)
 		}, dispatcher.removeTaskInfo)
 
@@ -76,7 +76,7 @@ func (dispatcher concreteActionDispatcher) Dispatch(req boshhandler.Request) bos
 		return boshhandler.NewExceptionResponse("unknown message %s", req.Method)
 
 	case action.IsAsynchronous():
-		dispatcher.logger.Error("Action Dispatcher", "Running async action %s", req.Method)
+		dispatcher.logger.Info("Action Dispatcher", "Running async action %s", req.Method)
 
 		var task boshtask.Task
 
@@ -88,7 +88,7 @@ func (dispatcher concreteActionDispatcher) Dispatch(req boshhandler.Request) bos
 		// after agent restart so that API consumers do not need to know
 		// if agent is restarted midway through the task.
 		if action.IsPersistent() {
-			dispatcher.logger.Error("Action Dispatcher", "Running persistent action %s", req.Method)
+			dispatcher.logger.Info("Action Dispatcher", "Running persistent action %s", req.Method)
 			task, err = dispatcher.taskService.CreateTask(runTask, dispatcher.removeTaskInfo)
 			if err != nil {
 				err = bosherr.WrapError(err, "Create Task Failed %s", req.Method)
@@ -97,7 +97,7 @@ func (dispatcher concreteActionDispatcher) Dispatch(req boshhandler.Request) bos
 			}
 
 			taskInfo := boshtask.TaskInfo{
-				TaskId:  task.Id,
+				TaskID:  task.ID,
 				Method:  req.Method,
 				Payload: req.GetPayload(),
 			}
@@ -120,12 +120,12 @@ func (dispatcher concreteActionDispatcher) Dispatch(req boshhandler.Request) bos
 		dispatcher.taskService.StartTask(task)
 
 		return boshhandler.NewValueResponse(boshtask.TaskStateValue{
-			AgentTaskId: task.Id,
+			AgentTaskID: task.ID,
 			State:       task.State,
 		})
 
 	default:
-		dispatcher.logger.Debug("Action Dispatcher", "Running sync action %s", req.Method)
+		dispatcher.logger.Info("Action Dispatcher", "Running sync action %s", req.Method)
 
 		value, err := dispatcher.actionRunner.Run(action, req.GetPayload())
 		if err != nil {
@@ -139,7 +139,7 @@ func (dispatcher concreteActionDispatcher) Dispatch(req boshhandler.Request) bos
 }
 
 func (dispatcher concreteActionDispatcher) removeTaskInfo(task boshtask.Task) {
-	err := dispatcher.taskManager.RemoveTaskInfo(task.Id)
+	err := dispatcher.taskManager.RemoveTaskInfo(task.ID)
 	if err != nil {
 		// There is not much we can do about failing to write state of a finished task.
 		// On next agent restart, task will be Resume()d again so it must be idempotent.

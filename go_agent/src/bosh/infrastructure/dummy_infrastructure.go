@@ -1,35 +1,38 @@
 package infrastructure
 
 import (
+	"encoding/json"
+	"path/filepath"
+
 	bosherr "bosh/errors"
-	boshdevicepathresolver "bosh/infrastructure/device_path_resolver"
+	boshdpresolv "bosh/infrastructure/devicepathresolver"
 	boshplatform "bosh/platform"
 	boshsettings "bosh/settings"
 	boshdir "bosh/settings/directories"
 	boshsys "bosh/system"
-	"encoding/json"
-	"path/filepath"
 )
 
 type dummyInfrastructure struct {
 	fs                 boshsys.FileSystem
 	dirProvider        boshdir.DirectoriesProvider
 	platform           boshplatform.Platform
-	devicePathResolver boshdevicepathresolver.DevicePathResolver
+	devicePathResolver boshdpresolv.DevicePathResolver
 }
 
-func NewDummyInfrastructure(fs boshsys.FileSystem, dirProvider boshdir.DirectoriesProvider,
+func NewDummyInfrastructure(
+	fs boshsys.FileSystem,
+	dirProvider boshdir.DirectoriesProvider,
 	platform boshplatform.Platform,
-	devicePathResolver boshdevicepathresolver.DevicePathResolver) (inf dummyInfrastructure) {
+	devicePathResolver boshdpresolv.DevicePathResolver,
+) (inf dummyInfrastructure) {
 	inf.fs = fs
 	inf.dirProvider = dirProvider
 	inf.platform = platform
 	inf.devicePathResolver = devicePathResolver
-
 	return
 }
 
-func (inf dummyInfrastructure) GetDevicePathResolver() boshdevicepathresolver.DevicePathResolver {
+func (inf dummyInfrastructure) GetDevicePathResolver() boshdpresolv.DevicePathResolver {
 	return inf.devicePathResolver
 }
 
@@ -38,7 +41,8 @@ func (inf dummyInfrastructure) SetupSsh(username string) (err error) {
 }
 
 func (inf dummyInfrastructure) GetSettings() (settings boshsettings.Settings, err error) {
-	settingsPath := filepath.Join(inf.dirProvider.BoshDir(), "settings.json")
+	// dummy-cpi-agent-env.json is written out by dummy CPI.
+	settingsPath := filepath.Join(inf.dirProvider.BoshDir(), "dummy-cpi-agent-env.json")
 	contents, err := inf.fs.ReadFile(settingsPath)
 	if err != nil {
 		err = bosherr.WrapError(err, "Read settings file")
@@ -62,6 +66,6 @@ func (inf dummyInfrastructure) GetEphemeralDiskPath(devicePath string) (realPath
 	return inf.platform.NormalizeDiskPath(devicePath)
 }
 
-func (inf dummyInfrastructure) MountPersistentDisk(volumeId string, mountPoint string) (err error) {
+func (inf dummyInfrastructure) MountPersistentDisk(volumeID string, mountPoint string) (err error) {
 	return
 }

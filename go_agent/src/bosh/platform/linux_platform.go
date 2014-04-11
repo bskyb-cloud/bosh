@@ -2,7 +2,7 @@ package platform
 
 import (
 	bosherr "bosh/errors"
-	boshdevicepathresolver "bosh/infrastructure/device_path_resolver"
+	boshdpresolv "bosh/infrastructure/devicepathresolver"
 	boshlog "bosh/logger"
 	boshcd "bosh/platform/cdutil"
 	boshcmd "bosh/platform/commands"
@@ -36,7 +36,7 @@ type linux struct {
 	diskManager        boshdisk.Manager
 	netManager         boshnet.NetManager
 	diskScanDuration   time.Duration
-	devicePathResolver boshdevicepathresolver.DevicePathResolver
+	devicePathResolver boshdpresolv.DevicePathResolver
 	logger             boshlog.Logger
 }
 
@@ -71,8 +71,6 @@ func NewLinuxPlatform(
 	return
 }
 
-const MAX_SCAN_RETRIES = 30
-
 func (p linux) GetFs() (fs boshsys.FileSystem) {
 	return p.fs
 }
@@ -105,11 +103,11 @@ func (p linux) GetFileContentsFromCDROM(fileName string) (contents []byte, err e
 	return p.cdutil.GetFileContents(fileName)
 }
 
-func (p linux) GetDevicePathResolver() (devicePathResolver boshdevicepathresolver.DevicePathResolver) {
+func (p linux) GetDevicePathResolver() (devicePathResolver boshdpresolv.DevicePathResolver) {
 	return p.devicePathResolver
 }
 
-func (p *linux) SetDevicePathResolver(devicePathResolver boshdevicepathresolver.DevicePathResolver) (err error) {
+func (p *linux) SetDevicePathResolver(devicePathResolver boshdpresolv.DevicePathResolver) (err error) {
 	p.devicePathResolver = devicePathResolver
 	return
 }
@@ -123,7 +121,7 @@ func (p linux) SetupDhcp(networks boshsettings.Networks) (err error) {
 }
 
 func (p linux) SetupRuntimeConfiguration() (err error) {
-	_, _, err = p.cmdRunner.RunCommand("bosh-agent-rc")
+	_, _, _, err = p.cmdRunner.RunCommand("bosh-agent-rc")
 	if err != nil {
 		err = bosherr.WrapError(err, "Shelling out to bosh-agent-rc")
 	}
@@ -145,7 +143,7 @@ func (p linux) CreateUser(username, password, basePath string) (err error) {
 
 	args = append(args, username)
 
-	_, _, err = p.cmdRunner.RunCommand("useradd", args...)
+	_, _, _, err = p.cmdRunner.RunCommand("useradd", args...)
 	if err != nil {
 		err = bosherr.WrapError(err, "Shelling out to useradd")
 		return
@@ -154,7 +152,7 @@ func (p linux) CreateUser(username, password, basePath string) (err error) {
 }
 
 func (p linux) AddUserToGroups(username string, groups []string) (err error) {
-	_, _, err = p.cmdRunner.RunCommand("usermod", "-G", strings.Join(groups, ","), username)
+	_, _, _, err = p.cmdRunner.RunCommand("usermod", "-G", strings.Join(groups, ","), username)
 	if err != nil {
 		err = bosherr.WrapError(err, "Shelling out to usermod")
 	}
@@ -181,7 +179,7 @@ func (p linux) DeleteEphemeralUsersMatching(reg string) (err error) {
 }
 
 func (p linux) deleteUser(user string) (err error) {
-	_, _, err = p.cmdRunner.RunCommand("userdel", "-r", user)
+	_, _, _, err = p.cmdRunner.RunCommand("userdel", "-r", user)
 	return
 }
 
@@ -194,7 +192,7 @@ func (p linux) findEphemeralUsersMatching(reg *regexp.Regexp) (matchingUsers []s
 
 	for _, line := range strings.Split(passwd, "\n") {
 		user := strings.Split(line, ":")[0]
-		matchesPrefix := strings.HasPrefix(user, boshsettings.EPHEMERAL_USER_PREFIX)
+		matchesPrefix := strings.HasPrefix(user, boshsettings.EphemeralUserPrefix)
 		matchesReg := reg.MatchString(user)
 
 		if matchesPrefix && matchesReg {
@@ -229,7 +227,7 @@ func (p linux) SetupSsh(publicKey, username string) (err error) {
 }
 
 func (p linux) SetUserPassword(user, encryptedPwd string) (err error) {
-	_, _, err = p.cmdRunner.RunCommand("usermod", "-p", encryptedPwd, user)
+	_, _, _, err = p.cmdRunner.RunCommand("usermod", "-p", encryptedPwd, user)
 	if err != nil {
 		err = bosherr.WrapError(err, "Shelling out to usermod")
 	}
@@ -237,7 +235,7 @@ func (p linux) SetUserPassword(user, encryptedPwd string) (err error) {
 }
 
 func (p linux) SetupHostname(hostname string) (err error) {
-	_, _, err = p.cmdRunner.RunCommand("hostname", hostname)
+	_, _, _, err = p.cmdRunner.RunCommand("hostname", hostname)
 	if err != nil {
 		err = bosherr.WrapError(err, "Shelling out to hostname")
 		return
@@ -250,7 +248,7 @@ func (p linux) SetupHostname(hostname string) (err error) {
 	}
 
 	buffer := bytes.NewBuffer([]byte{})
-	t := template.Must(template.New("etc-hosts").Parse(ETC_HOSTS_TEMPLATE))
+	t := template.Must(template.New("etc-hosts").Parse(etcHostsTemplate))
 
 	err = t.Execute(buffer, hostname)
 	if err != nil {
@@ -265,7 +263,7 @@ func (p linux) SetupHostname(hostname string) (err error) {
 	return
 }
 
-const ETC_HOSTS_TEMPLATE = `127.0.0.1 localhost {{ . }}
+const etcHostsTemplate = `127.0.0.1 localhost {{ . }}
 
 # The following lines are desirable for IPv6 capable hosts
 ::1 localhost ip6-localhost ip6-loopback {{ . }}
@@ -278,7 +276,7 @@ ff02::3 ip6-allhosts
 
 func (p linux) SetupLogrotate(groupName, basePath, size string) (err error) {
 	buffer := bytes.NewBuffer([]byte{})
-	t := template.Must(template.New("logrotate-d-config").Parse(ETC_LOGROTATE_D_TEMPLATE))
+	t := template.Must(template.New("logrotate-d-config").Parse(etcLogrotateDTemplate))
 
 	type logrotateArgs struct {
 		BasePath string
@@ -301,7 +299,7 @@ func (p linux) SetupLogrotate(groupName, basePath, size string) (err error) {
 }
 
 // Logrotate config file - /etc/logrotate.d/<group-name>
-const ETC_LOGROTATE_D_TEMPLATE = `# Generated by bosh-agent
+const etcLogrotateDTemplate = `# Generated by bosh-agent
 
 {{ .BasePath }}/data/sys/log/*.log {{ .BasePath }}/data/sys/log/*/*.log {{ .BasePath }}/data/sys/log/*/*/*.log {
   missingok
@@ -326,7 +324,7 @@ func (p linux) SetTimeWithNtpServers(servers []string) (err error) {
 	}
 
 	// Make a best effort to sync time now but don't error
-	_, _, _ = p.cmdRunner.RunCommand("ntpdate")
+	_, _, _, _ = p.cmdRunner.RunCommand("ntpdate")
 	return
 }
 
@@ -384,12 +382,12 @@ func (p linux) SetupEphemeralDiskWithPath(realPath string) (err error) {
 		err = bosherr.WrapError(err, "Making %s dir", dir)
 		return
 	}
-	_, _, err = p.cmdRunner.RunCommand("chown", "root:vcap", sysdir)
+	_, _, _, err = p.cmdRunner.RunCommand("chown", "root:vcap", sysdir)
 	if err != nil {
 		err = bosherr.WrapError(err, "chown %s", sysdir)
 		return
 	}
-	_, _, err = p.cmdRunner.RunCommand("chown", "root:vcap", dir)
+	_, _, _, err = p.cmdRunner.RunCommand("chown", "root:vcap", dir)
 	if err != nil {
 		err = bosherr.WrapError(err, "chown %s", dir)
 		return
@@ -402,7 +400,7 @@ func (p linux) SetupEphemeralDiskWithPath(realPath string) (err error) {
 		return
 	}
 
-	_, _, err = p.cmdRunner.RunCommand("chown", "root:vcap", dir)
+	_, _, _, err = p.cmdRunner.RunCommand("chown", "root:vcap", dir)
 	if err != nil {
 		err = bosherr.WrapError(err, "chown %s", dir)
 		return
@@ -422,12 +420,12 @@ func (p linux) SetupTmpDir() error {
 		return bosherr.WrapError(err, "Setting TMPDIR")
 	}
 
-	_, _, err = p.cmdRunner.RunCommand("chown", "root:vcap", "/tmp")
+	_, _, _, err = p.cmdRunner.RunCommand("chown", "root:vcap", "/tmp")
 	if err != nil {
 		return bosherr.WrapError(err, "chown /tmp")
 	}
 
-	_, _, err = p.cmdRunner.RunCommand("chmod", "0770", "/tmp")
+	_, _, _, err = p.cmdRunner.RunCommand("chmod", "0770", "/tmp")
 	if err != nil {
 		return bosherr.WrapError(err, "chmod /tmp")
 	}
@@ -471,7 +469,7 @@ func (p linux) MigratePersistentDisk(fromMountPoint, toMountPoint string) (err e
 	// Golang does not implement a file copy that would allow us to preserve dates...
 	// So we have to shell out to tar to perform the copy instead of delegating to the FileSystem
 	tarCopy := fmt.Sprintf("(tar -C %s -cf - .) | (tar -C %s -xpf -)", fromMountPoint, toMountPoint)
-	_, _, err = p.cmdRunner.RunCommand("sh", "-c", tarCopy)
+	_, _, _, err = p.cmdRunner.RunCommand("sh", "-c", tarCopy)
 	if err != nil {
 		err = bosherr.WrapError(err, "Copying files from old disk to new disk")
 		return
@@ -501,7 +499,7 @@ func (p linux) IsDevicePathMounted(path string) (result bool, err error) {
 }
 
 func (p linux) StartMonit() (err error) {
-	_, _, err = p.cmdRunner.RunCommand("sv", "up", "monit")
+	_, _, _, err = p.cmdRunner.RunCommand("sv", "up", "monit")
 	if err != nil {
 		err = bosherr.WrapError(err, "Shelling out to sv")
 	}

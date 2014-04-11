@@ -6,9 +6,6 @@ base_dir=$(readlink -nf $(dirname $0)/../..)
 source $base_dir/lib/prelude_apply.bash
 source $base_dir/lib/prelude_bosh.bash
 
-# Networking is failing after debootstrap stage due to invalid nameserver
-run_in_chroot $chroot "echo nameserver 8.8.8.8 > /etc/resolv.conf"
-
 mkdir -p $chroot/$bosh_dir/src
 
 # Libyaml
@@ -36,7 +33,7 @@ for file in $(cd $chroot/usr/lib; ls libyaml*); do
 done
 
 # Ruby
-ruby_basename=ruby-1.9.3-p484
+ruby_basename=ruby-1.9.3-p545
 ruby_archive=$ruby_basename.tar.gz
 
 cp -r $dir/assets/$ruby_archive $chroot/$bosh_dir/src

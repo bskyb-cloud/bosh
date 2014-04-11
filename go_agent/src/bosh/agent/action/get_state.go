@@ -45,18 +45,18 @@ func (a GetStateAction) IsPersistent() bool {
 type GetStateV1ApplySpec struct {
 	boshas.V1ApplySpec
 
-	AgentId      string             `json:"agent_id"`
+	AgentID      string             `json:"agent_id"`
 	BoshProtocol string             `json:"bosh_protocol"`
 	JobState     string             `json:"job_state"`
 	Vitals       *boshvitals.Vitals `json:"vitals,omitempty"`
-	Vm           boshsettings.Vm    `json:"vm"`
+	VM           boshsettings.VM    `json:"vm"`
 	Ntp          boshntp.NTPInfo    `json:"ntp"`
 }
 
-func (a GetStateAction) Run(filters ...string) (value GetStateV1ApplySpec, err error) {
-	spec, getSpecErr := a.specService.Get()
-	if getSpecErr != nil {
-		spec = boshas.V1ApplySpec{}
+func (a GetStateAction) Run(filters ...string) (GetStateV1ApplySpec, error) {
+	spec, err := a.specService.Get()
+	if err != nil {
+		return GetStateV1ApplySpec{}, bosherr.WrapError(err, "Getting current spec")
 	}
 
 	var vitals boshvitals.Vitals
@@ -65,23 +65,22 @@ func (a GetStateAction) Run(filters ...string) (value GetStateV1ApplySpec, err e
 	if len(filters) > 0 && filters[0] == "full" {
 		vitals, err = a.vitalsService.Get()
 		if err != nil {
-			err = bosherr.WrapError(err, "Building full vitals")
-			return
+			return GetStateV1ApplySpec{}, bosherr.WrapError(err, "Building full vitals")
 		}
 		vitalsReference = &vitals
 	}
 
-	value = GetStateV1ApplySpec{
+	value := GetStateV1ApplySpec{
 		spec,
-		a.settings.GetAgentId(),
+		a.settings.GetAgentID(),
 		"1",
 		a.jobSupervisor.Status(),
 		vitalsReference,
-		a.settings.GetVm(),
+		a.settings.GetVM(),
 		a.ntpService.GetInfo(),
 	}
 
-	return
+	return value, nil
 }
 
 func (a GetStateAction) Resume() (interface{}, error) {

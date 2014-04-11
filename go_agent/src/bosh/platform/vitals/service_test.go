@@ -1,24 +1,25 @@
 package vitals_test
 
 import (
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
+
 	boshassert "bosh/assert"
 	boshstats "bosh/platform/stats"
 	fakestats "bosh/platform/stats/fakes"
 	. "bosh/platform/vitals"
 	boshdirs "bosh/settings/directories"
-	. "github.com/onsi/ginkgo"
-	"github.com/stretchr/testify/assert"
 )
 
 func buildVitalsService() (statsCollector *fakestats.FakeStatsCollector, service Service) {
 	dirProvider := boshdirs.NewDirectoriesProvider("/fake/base/dir")
 	statsCollector = &fakestats.FakeStatsCollector{
-		CpuLoad: boshstats.CpuLoad{
+		CPULoad: boshstats.CPULoad{
 			One:     0.2,
 			Five:    4.55,
 			Fifteen: 1.123,
 		},
-		CpuStats: boshstats.CpuStats{
+		CPUStats: boshstats.CPUStats{
 			User:  56,
 			Sys:   10,
 			Wait:  1,
@@ -88,9 +89,9 @@ func init() {
 				},
 			}
 
-			assert.NoError(GinkgoT(), err)
+			Expect(err).ToNot(HaveOccurred())
 
-			boshassert.MatchesJsonMap(GinkgoT(), vitals, expectedVitals)
+			boshassert.MatchesJSONMap(GinkgoT(), vitals, expectedVitals)
 		})
 		It("getting vitals when missing disks", func() {
 
@@ -103,10 +104,10 @@ func init() {
 			}
 
 			vitals, err := service.Get()
-			assert.NoError(GinkgoT(), err)
+			Expect(err).ToNot(HaveOccurred())
 
-			boshassert.LacksJsonKey(GinkgoT(), vitals.Disk, "ephemeral")
-			boshassert.LacksJsonKey(GinkgoT(), vitals.Disk, "persistent")
+			boshassert.LacksJSONKey(GinkgoT(), vitals.Disk, "ephemeral")
+			boshassert.LacksJSONKey(GinkgoT(), vitals.Disk, "persistent")
 		})
 		It("get getting vitals on system disk error", func() {
 
@@ -114,7 +115,7 @@ func init() {
 			statsCollector.DiskStats = map[string]boshstats.DiskStats{}
 
 			_, err := service.Get()
-			assert.Error(GinkgoT(), err)
+			Expect(err).To(HaveOccurred())
 		})
 	})
 }

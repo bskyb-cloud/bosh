@@ -1,8 +1,10 @@
 package bundlecollection
 
-import boshsys "bosh/system"
+import (
+	boshsys "bosh/system"
+)
 
-// e.g. Job, Package
+// BundleDefinition uniquely identifies an asset within a BundleCollection (e.g. Job, Package)
 type BundleDefinition interface {
 	BundleName() string
 	BundleVersion() string
@@ -10,16 +12,17 @@ type BundleDefinition interface {
 
 type BundleCollection interface {
 	Get(defintion BundleDefinition) (bundle Bundle, err error)
+	List() ([]Bundle, error)
 }
 
 type Bundle interface {
-	Install() (fs boshsys.FileSystem, path string, err error)
+	Install(sourcePath string) (fs boshsys.FileSystem, path string, err error)
+	InstallWithoutContents() (fs boshsys.FileSystem, path string, err error)
+	Uninstall() (err error)
 
+	IsInstalled() (bool, error)
 	GetInstallPath() (fs boshsys.FileSystem, path string, err error)
 
 	Enable() (fs boshsys.FileSystem, path string, err error)
-
 	Disable() (err error)
-
-	Uninstall() (err error)
 }

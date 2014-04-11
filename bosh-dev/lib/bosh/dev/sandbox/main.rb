@@ -6,6 +6,7 @@ require 'bosh/dev/sandbox/socket_connector'
 require 'bosh/dev/sandbox/database_migrator'
 require 'bosh/dev/sandbox/postgresql'
 require 'bosh/dev/sandbox/mysql'
+require 'cloud/dummy'
 
 module Bosh::Dev::Sandbox
   class Main
@@ -33,9 +34,33 @@ module Bosh::Dev::Sandbox
 
     alias_method :db_name, :name
     attr_reader :blobstore_storage_dir
+    attr_reader :agent_type
+
     attr_accessor :director_fix_stateful_nodes
 
-    def initialize(logger = Logger.new(STDOUT))
+    attr_reader :cpi
+
+    def self.from_env
+      db_opts = {
+        type: ENV['DB'] || 'postgresql',
+        user: ENV['TRAVIS'] ? 'travis' : 'root',
+        password: ENV['TRAVIS'] ? '' : 'password',
+      }
+      agent_type = ENV['BOSH_INTEGRATION_AGENT_TYPE'] || 'ruby'
+
+      new(
+        db_opts,
+        ENV['DEBUG'],
+        agent_type,
+        ENV['TEST_ENV_NUMBER'].to_i,
+        Logger.new(STDOUT),
+      )
+    end
+
+    def initialize(db_opts, debug, agent_type, test_env_number, logger)
+      @debug = debug
+      @agent_type = agent_type
+      @test_env_number = test_env_number
       @logger = logger
       @name = SecureRandom.hex(6)
 
@@ -86,12 +111,18 @@ module Bosh::Dev::Sandbox
         @logger,
       )
 
-      if ENV['DB'] == 'mysql'
-        mysql_user, mysql_password = ENV['TRAVIS'] ? ['travis', ''] : %w(root password)
-        @database = Mysql.new(@name, @logger, mysql_user, mysql_password)
+      if db_opts[:name] == 'mysql'
+        @database = Mysql.new(@name, @logger, db_opts[:user], db_opts[:password])
       else
         @database = Postgresql.new(@name, @logger)
       end
+
+      # Note that this is not the same object
+      # as dummy cpi used inside bosh-director process
+      @cpi = Bosh::Clouds::Dummy.new(
+        'dir' => cloud_storage_dir,
+        'agent' => { 'type' => agent_type },
+      )
 
       @database_migrator = DatabaseMigrator.new(DIRECTOR_PATH, director_config, @logger)
     end
@@ -108,14 +139,10 @@ module Bosh::Dev::Sandbox
       setup_sandbox_root
 
       @redis_process.start
-      @logger.info("Waiting for redis-server to come up on port #{redis_port}")
       @redis_socket_connector.try_to_connect
-      @nats_process.start
-      @logger.info("Waiting for nats-server to come up on port #{nats_port}")
-      @nats_socket_connector.try_to_connect
 
-      @database.create_db
-      @database_migrator.migrate
+      @nats_process.start
+      @nats_socket_connector.try_to_connect
 
       FileUtils.mkdir_p(cloud_storage_dir)
       FileUtils.rm_rf(logs_path)
@@ -144,14 +171,14 @@ module Bosh::Dev::Sandbox
     end
 
     def save_task_logs(name)
-      if ENV['DEBUG'] && File.directory?(task_logs_dir)
+      if @debug && File.directory?(task_logs_dir)
         task_name = "task_#{name}_#{SecureRandom.hex(6)}"
         FileUtils.mv(task_logs_dir, File.join(logs_path, task_name))
       end
     end
 
     def stop
-      kill_agents
+      @cpi.kill_agents
       @scheduler_process.stop
       @worker_process.stop
       @director_process.stop
@@ -202,14 +229,16 @@ module Bosh::Dev::Sandbox
     private
 
     def do_reset(name)
-      kill_agents
+      @cpi.kill_agents
       @worker_process.stop
       @director_process.stop
       @health_monitor_process.stop
 
       Redis.new(host: 'localhost', port: redis_port).flushdb
 
-      @database.drop_db
+      @database.drop_db if @database_created
+      @database_created = true
+
       @database.create_db
       @database_migrator.migrate
 
@@ -230,19 +259,7 @@ module Bosh::Dev::Sandbox
 
       # CI does not have enough time to start bosh-director
       # for some parallel tests; increasing to 60 secs (= 300 tries).
-      @logger.info("Waiting for director to come up on port #{director_port}")
       @director_socket_connector.try_to_connect(300)
-    end
-
-    def kill_agents
-      vm_ids = Dir.glob(File.join(agent_tmp_path, 'running_vms', '*')).map { |vm| File.basename(vm).to_i }
-      vm_ids.each do |agent_pid|
-        begin
-          Process.kill('INT', agent_pid)
-        rescue Errno::ESRCH
-          @logger.info("Running VM found but no agent with #{agent_pid} is running")
-        end
-      end
     end
 
     def setup_sandbox_root
@@ -271,10 +288,7 @@ module Bosh::Dev::Sandbox
       # I don't want to optimize for look-up speed, we only have 5 named ports anyway
       @port_names ||= []
       @port_names << name unless @port_names.include?(name)
-
-      offset = @port_names.index(name)
-      test_number = ENV['TEST_ENV_NUMBER'].to_i
-      61000 + test_number * 100 + offset
+      61000 + @test_env_number * 100 + @port_names.index(name)
     end
 
     attr_reader :logs_path, :director_tmp_path, :dns_db_path, :task_logs_dir

@@ -2,14 +2,14 @@ package system_test
 
 import (
 	. "github.com/onsi/ginkgo"
-	"github.com/stretchr/testify/assert"
+	. "github.com/onsi/gomega"
 
 	boshlog "bosh/logger"
 	. "bosh/system"
 )
 
 func createRunner() (r CmdRunner) {
-	r = NewExecCmdRunner(boshlog.NewLogger(boshlog.LEVEL_NONE))
+	r = NewExecCmdRunner(boshlog.NewLogger(boshlog.LevelNone))
 	return
 }
 func init() {
@@ -21,11 +21,12 @@ func init() {
 				WorkingDir: "../../..",
 			}
 			runner := createRunner()
-			stdout, stderr, err := runner.RunComplexCommand(cmd)
-			assert.NoError(GinkgoT(), err)
-			assert.Empty(GinkgoT(), stderr)
-			assert.Contains(GinkgoT(), stdout, "README.md")
-			assert.Contains(GinkgoT(), stdout, "total")
+			stdout, stderr, status, err := runner.RunComplexCommand(cmd)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stdout).To(ContainSubstring("README.md"))
+			Expect(stdout).To(ContainSubstring("total"))
+			Expect(stderr).To(BeEmpty())
+			Expect(status).To(Equal(0))
 		})
 
 		It("run complex command with env", func() {
@@ -36,68 +37,84 @@ func init() {
 				},
 			}
 			runner := createRunner()
-			stdout, stderr, err := runner.RunComplexCommand(cmd)
-			assert.NoError(GinkgoT(), err)
-			assert.Empty(GinkgoT(), stderr)
-			assert.Contains(GinkgoT(), stdout, "FOO=BAR")
-			assert.Contains(GinkgoT(), stdout, "PATH=")
+			stdout, stderr, status, err := runner.RunComplexCommand(cmd)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stdout).To(ContainSubstring("FOO=BAR"))
+			Expect(stdout).To(ContainSubstring("PATH="))
+			Expect(stderr).To(BeEmpty())
+			Expect(status).To(Equal(0))
 		})
 
 		It("run command", func() {
 			runner := createRunner()
-			stdout, stderr, err := runner.RunCommand("echo", "Hello World!")
-			assert.NoError(GinkgoT(), err)
-			assert.Empty(GinkgoT(), stderr)
-			assert.Equal(GinkgoT(), stdout, "Hello World!\n")
+			stdout, stderr, status, err := runner.RunCommand("echo", "Hello World!")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stdout).To(Equal("Hello World!\n"))
+			Expect(stderr).To(BeEmpty())
+			Expect(status).To(Equal(0))
 		})
 
 		It("run command with error output", func() {
 			runner := createRunner()
-			stdout, stderr, err := runner.RunCommand("sh", "-c", "echo error-output >&2")
-			assert.NoError(GinkgoT(), err)
-			assert.Contains(GinkgoT(), stderr, "error-output")
-			assert.Empty(GinkgoT(), stdout)
+			stdout, stderr, status, err := runner.RunCommand("sh", "-c", "echo error-output >&2")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stdout).To(BeEmpty())
+			Expect(stderr).To(ContainSubstring("error-output"))
+			Expect(status).To(Equal(0))
+		})
+
+		It("run command with non-0 exit status", func() {
+			runner := createRunner()
+			stdout, stderr, status, err := runner.RunCommand("sh", "-c", "exit 14")
+			Expect(err).To(HaveOccurred())
+			Expect(stdout).To(BeEmpty())
+			Expect(stderr).To(BeEmpty())
+			Expect(status).To(Equal(14))
 		})
 
 		It("run command with error", func() {
 			runner := createRunner()
-			stdout, stderr, err := runner.RunCommand("false")
-			assert.Error(GinkgoT(), err)
-			assert.Equal(GinkgoT(), err.Error(), "Running command: 'false', stdout: '', stderr: '': exit status 1")
-			assert.Empty(GinkgoT(), stderr)
-			assert.Empty(GinkgoT(), stdout)
+			stdout, stderr, status, err := runner.RunCommand("false")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(Equal("Running command: 'false', stdout: '', stderr: '': exit status 1"))
+			Expect(stderr).To(BeEmpty())
+			Expect(stdout).To(BeEmpty())
+			Expect(status).To(Equal(1))
 		})
 
 		It("run command with error with args", func() {
 			runner := createRunner()
-			stdout, stderr, err := runner.RunCommand("false", "second arg")
-			assert.Error(GinkgoT(), err)
-			assert.Equal(GinkgoT(), err.Error(), "Running command: 'false second arg', stdout: '', stderr: '': exit status 1")
-			assert.Empty(GinkgoT(), stderr)
-			assert.Empty(GinkgoT(), stdout)
+			stdout, stderr, status, err := runner.RunCommand("false", "second arg")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(Equal("Running command: 'false second arg', stdout: '', stderr: '': exit status 1"))
+			Expect(stderr).To(BeEmpty())
+			Expect(stdout).To(BeEmpty())
+			Expect(status).To(Equal(1))
 		})
 
 		It("run command with cmd not found", func() {
 			runner := createRunner()
-			stdout, stderr, err := runner.RunCommand("something that does not exist")
-			assert.Error(GinkgoT(), err)
-			assert.Contains(GinkgoT(), err.Error(), "not found")
-			assert.Empty(GinkgoT(), stderr)
-			assert.Empty(GinkgoT(), stdout)
+			stdout, stderr, status, err := runner.RunCommand("something that does not exist")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not found"))
+			Expect(stderr).To(BeEmpty())
+			Expect(stdout).To(BeEmpty())
+			Expect(status).To(Equal(-1))
 		})
 
 		It("run command with input", func() {
 			runner := createRunner()
-			stdout, stderr, err := runner.RunCommandWithInput("foo\nbar\nbaz", "grep", "ba")
-			assert.NoError(GinkgoT(), err)
-			assert.Equal(GinkgoT(), "bar\nbaz\n", stdout)
-			assert.Empty(GinkgoT(), stderr)
+			stdout, stderr, status, err := runner.RunCommandWithInput("foo\nbar\nbaz", "grep", "ba")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stdout).To(Equal("bar\nbaz\n"))
+			Expect(stderr).To(BeEmpty())
+			Expect(status).To(Equal(0))
 		})
 
 		It("command exists", func() {
 			runner := createRunner()
-			assert.True(GinkgoT(), runner.CommandExists("env"))
-			assert.False(GinkgoT(), runner.CommandExists("absolutely-does-not-exist-ever-please-unicorns"))
+			Expect(runner.CommandExists("env")).To(BeTrue())
+			Expect(runner.CommandExists("absolutely-does-not-exist-ever-please-unicorns")).To(BeFalse())
 		})
 	})
 }

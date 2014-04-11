@@ -1,6 +1,16 @@
 package jobsupervisor_test
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
+	"net/smtp"
+	"time"
+
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/assert"
+
 	boshalert "bosh/agent/alert"
 	. "bosh/jobsupervisor"
 	boshmonit "bosh/jobsupervisor/monit"
@@ -8,13 +18,6 @@ import (
 	boshlog "bosh/logger"
 	boshdir "bosh/settings/directories"
 	fakesys "bosh/system/fakes"
-	"bytes"
-	"errors"
-	"fmt"
-	. "github.com/onsi/ginkgo"
-	"github.com/stretchr/testify/assert"
-	"net/smtp"
-	"time"
 )
 
 func doJobFailureEmail(email string, port int) (err error) {
@@ -39,50 +42,47 @@ func doJobFailureEmail(email string, port int) (err error) {
 	return
 }
 
-type monitJobSupDeps struct {
-	fs                    *fakesys.FakeFileSystem
-	runner                *fakesys.FakeCmdRunner
-	client                *fakemonit.FakeMonitClient
-	logger                boshlog.Logger
-	dirProvider           boshdir.DirectoriesProvider
-	jobFailuresServerPort int
-}
-
-func buildMonitJobSupervisor() (deps monitJobSupDeps, monit JobSupervisor) {
-	deps = monitJobSupDeps{
-		fs:                    &fakesys.FakeFileSystem{},
-		runner:                &fakesys.FakeCmdRunner{},
-		client:                fakemonit.NewFakeMonitClient(),
-		logger:                boshlog.NewLogger(boshlog.LEVEL_NONE),
-		dirProvider:           boshdir.NewDirectoriesProvider("/var/vcap"),
-		jobFailuresServerPort: getJobFailureServerPort(),
-	}
-
-	monit = NewMonitJobSupervisor(
-		deps.fs,
-		deps.runner,
-		deps.client,
-		deps.logger,
-		deps.dirProvider,
-		deps.jobFailuresServerPort,
-		0*time.Millisecond,
-	)
-	return
-}
-
-var jobFailureServerPort int = 5000
+var jobFailureServerPort = 5000
 
 func getJobFailureServerPort() int {
 	jobFailureServerPort++
 	return jobFailureServerPort
 }
-func init() {
-	Describe("Testing with Ginkgo", func() {
-		It("waits until the job is reloaded", func() {
-			deps, monit := buildMonitJobSupervisor()
 
-			deps.client.Incarnations = []int{1, 1, 1, 2, 3}
-			deps.client.StatusStatus = fakemonit.FakeMonitStatus{
+func init() {
+	Describe("monitJobSupervisor", func() {
+		var (
+			fs                    *fakesys.FakeFileSystem
+			runner                *fakesys.FakeCmdRunner
+			client                *fakemonit.FakeMonitClient
+			logger                boshlog.Logger
+			dirProvider           boshdir.DirectoriesProvider
+			jobFailuresServerPort int
+			monit                 JobSupervisor
+		)
+
+		BeforeEach(func() {
+			fs = &fakesys.FakeFileSystem{}
+			runner = &fakesys.FakeCmdRunner{}
+			client = fakemonit.NewFakeMonitClient()
+			logger = boshlog.NewLogger(boshlog.LevelNone)
+			dirProvider = boshdir.NewDirectoriesProvider("/var/vcap")
+			jobFailuresServerPort = getJobFailureServerPort()
+
+			monit = NewMonitJobSupervisor(
+				fs,
+				runner,
+				client,
+				logger,
+				dirProvider,
+				jobFailuresServerPort,
+				0*time.Millisecond,
+			)
+		})
+
+		It("waits until the job is reloaded", func() {
+			client.Incarnations = []int{1, 1, 1, 2, 3}
+			client.StatusStatus = fakemonit.FakeMonitStatus{
 				Services: []boshmonit.Service{
 					boshmonit.Service{Monitored: true, Status: "failing"},
 					boshmonit.Service{Monitored: true, Status: "running"},
@@ -92,20 +92,18 @@ func init() {
 
 			err := monit.Reload()
 
-			assert.NoError(GinkgoT(), err)
-			assert.Equal(GinkgoT(), 1, len(deps.runner.RunCommands))
-			assert.Equal(GinkgoT(), []string{"monit", "reload"}, deps.runner.RunCommands[0])
-			assert.Equal(GinkgoT(), deps.client.StatusCalledTimes, 4)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(1).To(Equal(len(runner.RunCommands)))
+			Expect(runner.RunCommands[0]).To(Equal([]string{"monit", "reload"}))
+			Expect(client.StatusCalledTimes).To(Equal(4))
 		})
 
 		It("stops trying to reload after 60 attempts", func() {
-			deps, monit := buildMonitJobSupervisor()
-
 			for i := 0; i < 61; i++ {
-				deps.client.Incarnations = append(deps.client.Incarnations, 1)
+				client.Incarnations = append(client.Incarnations, 1)
 			}
 
-			deps.client.StatusStatus = fakemonit.FakeMonitStatus{
+			client.StatusStatus = fakemonit.FakeMonitStatus{
 				Services: []boshmonit.Service{
 					boshmonit.Service{Monitored: true, Status: "failing"},
 					boshmonit.Service{Monitored: true, Status: "running"},
@@ -115,52 +113,36 @@ func init() {
 
 			err := monit.Reload()
 
-			assert.Error(GinkgoT(), err)
-			assert.Equal(GinkgoT(), 1, len(deps.runner.RunCommands))
-			assert.Equal(GinkgoT(), []string{"monit", "reload"}, deps.runner.RunCommands[0])
-			assert.Equal(GinkgoT(), deps.client.StatusCalledTimes, 60)
+			Expect(err).To(HaveOccurred())
+			Expect(1).To(Equal(len(runner.RunCommands)))
+			Expect(runner.RunCommands[0]).To(Equal([]string{"monit", "reload"}))
+			Expect(client.StatusCalledTimes).To(Equal(60))
 		})
 
 		It("start starts each monit service in group vcap", func() {
-			deps, monit := buildMonitJobSupervisor()
-
-			deps.client.ServicesInGroupServices = []string{"fake-service"}
+			client.ServicesInGroupServices = []string{"fake-service"}
 
 			err := monit.Start()
-			assert.NoError(GinkgoT(), err)
+			Expect(err).ToNot(HaveOccurred())
 
-			assert.Equal(GinkgoT(), "vcap", deps.client.ServicesInGroupName)
-			assert.Equal(GinkgoT(), 1, len(deps.client.StartServiceNames))
-			assert.Equal(GinkgoT(), "fake-service", deps.client.StartServiceNames[0])
+			Expect("vcap").To(Equal(client.ServicesInGroupName))
+			Expect(1).To(Equal(len(client.StartServiceNames)))
+			Expect("fake-service").To(Equal(client.StartServiceNames[0]))
 		})
 
 		It("stop stops each monit service in group vcap", func() {
-			deps, monit := buildMonitJobSupervisor()
-
-			deps.client.ServicesInGroupServices = []string{"fake-service"}
+			client.ServicesInGroupServices = []string{"fake-service"}
 
 			err := monit.Stop()
-			assert.NoError(GinkgoT(), err)
+			Expect(err).ToNot(HaveOccurred())
 
-			assert.Equal(GinkgoT(), "vcap", deps.client.ServicesInGroupName)
-			assert.Equal(GinkgoT(), 1, len(deps.client.StopServiceNames))
-			assert.Equal(GinkgoT(), "fake-service", deps.client.StopServiceNames[0])
-		})
-
-		It("add job", func() {
-			deps, monit := buildMonitJobSupervisor()
-			deps.fs.WriteFileString("/some/config/path", "some config content")
-			monit.AddJob("router", 0, "/some/config/path")
-
-			writtenConfig, err := deps.fs.ReadFileString(deps.dirProvider.MonitJobsDir() + "/0000_router.monitrc")
-			assert.NoError(GinkgoT(), err)
-			assert.Equal(GinkgoT(), writtenConfig, "some config content")
+			Expect("vcap").To(Equal(client.ServicesInGroupName))
+			Expect(1).To(Equal(len(client.StopServiceNames)))
+			Expect("fake-service").To(Equal(client.StopServiceNames[0]))
 		})
 
 		It("status returns running when all services are monitored and running", func() {
-			deps, monit := buildMonitJobSupervisor()
-
-			deps.client.StatusStatus = fakemonit.FakeMonitStatus{
+			client.StatusStatus = fakemonit.FakeMonitStatus{
 				Services: []boshmonit.Service{
 					boshmonit.Service{Monitored: true, Status: "running"},
 					boshmonit.Service{Monitored: true, Status: "running"},
@@ -168,13 +150,11 @@ func init() {
 			}
 
 			status := monit.Status()
-			assert.Equal(GinkgoT(), "running", status)
+			Expect("running").To(Equal(status))
 		})
 
 		It("status returns failing when all services are monitored and at least one service is failing", func() {
-			deps, monit := buildMonitJobSupervisor()
-
-			deps.client.StatusStatus = fakemonit.FakeMonitStatus{
+			client.StatusStatus = fakemonit.FakeMonitStatus{
 				Services: []boshmonit.Service{
 					boshmonit.Service{Monitored: true, Status: "failing"},
 					boshmonit.Service{Monitored: true, Status: "running"},
@@ -182,13 +162,11 @@ func init() {
 			}
 
 			status := monit.Status()
-			assert.Equal(GinkgoT(), "failing", status)
+			Expect("failing").To(Equal(status))
 		})
 
 		It("status returns failing when at least one service is not monitored", func() {
-			deps, monit := buildMonitJobSupervisor()
-
-			deps.client.StatusStatus = fakemonit.FakeMonitStatus{
+			client.StatusStatus = fakemonit.FakeMonitStatus{
 				Services: []boshmonit.Service{
 					boshmonit.Service{Monitored: false, Status: "running"},
 					boshmonit.Service{Monitored: true, Status: "running"},
@@ -196,13 +174,11 @@ func init() {
 			}
 
 			status := monit.Status()
-			assert.Equal(GinkgoT(), "failing", status)
+			Expect("failing").To(Equal(status))
 		})
 
 		It("status returns start when at least one service is starting", func() {
-			deps, monit := buildMonitJobSupervisor()
-
-			deps.client.StatusStatus = fakemonit.FakeMonitStatus{
+			client.StatusStatus = fakemonit.FakeMonitStatus{
 				Services: []boshmonit.Service{
 					boshmonit.Service{Monitored: true, Status: "failing"},
 					boshmonit.Service{Monitored: true, Status: "starting"},
@@ -211,16 +187,14 @@ func init() {
 			}
 
 			status := monit.Status()
-			assert.Equal(GinkgoT(), "starting", status)
+			Expect("starting").To(Equal(status))
 		})
 
 		It("status returns unknown when error", func() {
-			deps, monit := buildMonitJobSupervisor()
-
-			deps.client.StatusErr = errors.New("fake-monit-client-error")
+			client.StatusErr = errors.New("fake-monit-client-error")
 
 			status := monit.Status()
-			assert.Equal(GinkgoT(), "unknown", status)
+			Expect("unknown").To(Equal(status))
 		})
 
 		It("monitor job failures", func() {
@@ -231,8 +205,6 @@ func init() {
 				return
 			}
 
-			deps, monit := buildMonitJobSupervisor()
-
 			go monit.MonitorJobFailures(failureHandler)
 
 			msg := `Message-id: <1304319946.0@localhost>
@@ -242,11 +214,11 @@ func init() {
     Date: Sun, 22 May 2011 20:07:41 +0500
     Description: process is not running`
 
-			err := doJobFailureEmail(msg, deps.jobFailuresServerPort)
-			assert.NoError(GinkgoT(), err)
+			err := doJobFailureEmail(msg, jobFailuresServerPort)
+			Expect(err).ToNot(HaveOccurred())
 
 			assert.Equal(GinkgoT(), handledAlert, boshalert.MonitAlert{
-				Id:          "1304319946.0@localhost",
+				ID:          "1304319946.0@localhost",
 				Service:     "nats",
 				Event:       "does not exist",
 				Action:      "restart",
@@ -263,15 +235,128 @@ func init() {
 				return
 			}
 
-			deps, monit := buildMonitJobSupervisor()
-
 			go monit.MonitorJobFailures(failureHandler)
 
 			msg := `Hi! How'sit goin`
 
-			err := doJobFailureEmail(msg, deps.jobFailuresServerPort)
-			assert.NoError(GinkgoT(), err)
-			assert.False(GinkgoT(), didHandleAlert)
+			err := doJobFailureEmail(msg, jobFailuresServerPort)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(didHandleAlert).To(BeFalse())
+		})
+
+		Describe("AddJob", func() {
+			BeforeEach(func() {
+				fs.WriteFileString("/some/config/path", "fake-config")
+			})
+
+			Context("when reading configuration from config path succeeds", func() {
+				Context("when writing job configuration succeeds", func() {
+					It("returns no error because monit can track added job in jobs directory", func() {
+						err := monit.AddJob("router", 0, "/some/config/path")
+						Expect(err).ToNot(HaveOccurred())
+
+						writtenConfig, err := fs.ReadFileString(
+							dirProvider.MonitJobsDir() + "/0000_router.monitrc")
+						Expect(err).ToNot(HaveOccurred())
+						Expect(writtenConfig).To(Equal("fake-config"))
+					})
+				})
+
+				Context("when writing job configuration fails", func() {
+					It("returns error", func() {
+						fs.WriteToFileError = errors.New("fake-write-error")
+
+						err := monit.AddJob("router", 0, "/some/config/path")
+						Expect(err).To(HaveOccurred())
+						Expect(err.Error()).To(ContainSubstring("fake-write-error"))
+					})
+				})
+			})
+
+			Context("when reading configuration from config path fails", func() {
+				It("returns error", func() {
+					fs.ReadFileError = errors.New("fake-read-error")
+
+					err := monit.AddJob("router", 0, "/some/config/path")
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("fake-read-error"))
+				})
+			})
+		})
+
+		Describe("RemoveAllJobs", func() {
+			Context("when jobs directory removal succeeds", func() {
+				It("does not return error because all jobs are removed from monit", func() {
+					jobsDir := dirProvider.MonitJobsDir()
+					jobBasename := "/0000_router.monitrc"
+					fs.WriteFileString(jobsDir+jobBasename, "fake-added-job")
+
+					err := monit.RemoveAllJobs()
+					Expect(err).ToNot(HaveOccurred())
+
+					Expect(fs.FileExists(jobsDir)).To(BeFalse())
+					Expect(fs.FileExists(jobsDir + jobBasename)).To(BeFalse())
+				})
+			})
+
+			Context("when jobs directory removal fails", func() {
+				It("returns error if removing jobs directory fails", func() {
+					fs.RemoveAllError = errors.New("fake-remove-all-error")
+
+					err := monit.RemoveAllJobs()
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("fake-remove-all-error"))
+				})
+			})
+		})
+
+		Describe("Unmonitor", func() {
+			BeforeEach(func() {
+				client.ServicesInGroupServices = []string{"fake-srv-1", "fake-srv-2", "fake-srv-3"}
+				client.UnmonitorServiceErrs = []error{nil, nil, nil}
+			})
+
+			Context("when all services succeed to be unmonitored", func() {
+				It("returns no error because all services got unmonitored", func() {
+					err := monit.Unmonitor()
+					Expect(err).ToNot(HaveOccurred())
+
+					Expect(client.ServicesInGroupName).To(Equal("vcap"))
+					Expect(client.UnmonitorServiceNames).To(Equal(
+						[]string{"fake-srv-1", "fake-srv-2", "fake-srv-3"}))
+				})
+			})
+
+			Context("when at least one service fails to be unmonitored", func() {
+				BeforeEach(func() {
+					client.UnmonitorServiceErrs = []error{
+						nil, errors.New("fake-unmonitor-error"), nil,
+					}
+				})
+
+				It("returns first unmonitor error", func() {
+					err := monit.Unmonitor()
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("fake-unmonitor-error"))
+				})
+
+				It("only tries to unmonitor services before the first unmonitor error", func() {
+					err := monit.Unmonitor()
+					Expect(err).To(HaveOccurred())
+					Expect(client.ServicesInGroupName).To(Equal("vcap"))
+					Expect(client.UnmonitorServiceNames).To(Equal([]string{"fake-srv-1", "fake-srv-2"}))
+				})
+			})
+
+			Context("when failed retrieving list of services", func() {
+				It("returns error", func() {
+					client.ServicesInGroupErr = errors.New("fake-services-error")
+
+					err := monit.Unmonitor()
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("fake-services-error"))
+				})
+			})
 		})
 	})
 }

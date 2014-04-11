@@ -1,12 +1,16 @@
 package fakes
 
 import (
-	bosherr "bosh/errors"
 	"bytes"
 	"errors"
-	gouuid "github.com/nu7hatch/gouuid"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+
+	gouuid "github.com/nu7hatch/gouuid"
+
+	bosherr "bosh/errors"
 )
 
 type FakeFileType string
@@ -18,21 +22,20 @@ const (
 )
 
 type FakeFileSystem struct {
-	Files map[string]*FakeFileStats
+	files map[string]*FakeFileStats
 
 	HomeDirUsername string
 	HomeDirHomePath string
 
-	FilesToOpen map[string]*os.File
-
 	ReadFileError    error
 	WriteToFileError error
-	MkdirAllError    error
 	SymlinkError     error
 
-	CopyDirEntriesError   error
-	CopyDirEntriesSrcPath string
-	CopyDirEntriesDstPath string
+	MkdirAllError       error
+	mkdirAllErrorByPath map[string]error
+
+	ChownErr error
+	ChmodErr error
 
 	CopyFileError error
 
@@ -40,7 +43,10 @@ type FakeFileSystem struct {
 	RenameOldPaths []string
 	RenameNewPaths []string
 
-	RemoveAllError error
+	RemoveAllError       error
+	removeAllErrorByPath map[string]error
+
+	ReadLinkError error
 
 	TempFileError  error
 	ReturnTempFile *os.File
@@ -48,6 +54,7 @@ type FakeFileSystem struct {
 	TempDirDir   string
 	TempDirError error
 
+	GlobErr  error
 	globsMap map[string][][]string
 }
 
@@ -65,12 +72,14 @@ func (stats FakeFileStats) StringContents() string {
 
 func NewFakeFileSystem() *FakeFileSystem {
 	return &FakeFileSystem{
-		globsMap: make(map[string][][]string),
+		globsMap:             map[string][][]string{},
+		removeAllErrorByPath: map[string]error{},
+		mkdirAllErrorByPath:  map[string]error{},
 	}
 }
 
 func (fs *FakeFileSystem) GetFileTestStat(path string) (stats *FakeFileStats) {
-	stats = fs.Files[path]
+	stats = fs.files[path]
 	return
 }
 
@@ -80,27 +89,51 @@ func (fs *FakeFileSystem) HomeDir(username string) (path string, err error) {
 	return
 }
 
-func (fs *FakeFileSystem) MkdirAll(path string, perm os.FileMode) (err error) {
-	if fs.MkdirAllError == nil {
-		stats := fs.getOrCreateFile(path)
-		stats.FileMode = perm
-		stats.FileType = FakeFileTypeDir
+func (fs *FakeFileSystem) RegisterMkdirAllError(path string, err error) {
+	if _, ok := fs.mkdirAllErrorByPath[path]; ok {
+		panic(fmt.Sprintf("MkdirAll error is already set for path: %s", path))
+	}
+	fs.mkdirAllErrorByPath[path] = err
+}
+
+func (fs *FakeFileSystem) MkdirAll(path string, perm os.FileMode) error {
+	if fs.MkdirAllError != nil {
+		return fs.MkdirAllError
 	}
 
-	err = fs.MkdirAllError
-	return
+	if fs.mkdirAllErrorByPath[path] != nil {
+		return fs.mkdirAllErrorByPath[path]
+	}
+
+	stats := fs.getOrCreateFile(path)
+	stats.FileMode = perm
+	stats.FileType = FakeFileTypeDir
+	return nil
 }
 
-func (fs *FakeFileSystem) Chown(path, username string) (err error) {
+func (fs *FakeFileSystem) Chown(path, username string) error {
+	// check early to avoid requiring file presence
+	if fs.ChownErr != nil {
+		return fs.ChownErr
+	}
 	stats := fs.GetFileTestStat(path)
 	stats.Username = username
-	return
+	return nil
 }
 
-func (fs *FakeFileSystem) Chmod(path string, perm os.FileMode) (err error) {
+func (fs *FakeFileSystem) Chmod(path string, perm os.FileMode) error {
+	// check early to avoid requiring file presence
+	if fs.ChmodErr != nil {
+		return fs.ChmodErr
+	}
+
 	stats := fs.GetFileTestStat(path)
+	if stats == nil {
+		return fmt.Errorf("Path does not exist: %s", path)
+	}
+
 	stats.FileMode = perm
-	return
+	return nil
 }
 
 func (fs *FakeFileSystem) WriteFileString(path, content string) (err error) {
@@ -150,28 +183,28 @@ func (fs *FakeFileSystem) ReadFile(path string) ([]byte, error) {
 	if stats != nil {
 		if fs.ReadFileError != nil {
 			return nil, fs.ReadFileError
-		} else {
-			return stats.Content, nil
 		}
-	} else {
-		return nil, errors.New("File not found")
+		return stats.Content, nil
 	}
+	return nil, errors.New("File not found")
 }
 
 func (fs *FakeFileSystem) FileExists(path string) bool {
 	return fs.GetFileTestStat(path) != nil
 }
 
-func (fs *FakeFileSystem) Rename(oldPath, newPath string) (err error) {
+func (fs *FakeFileSystem) Rename(oldPath, newPath string) error {
 	if fs.RenameError != nil {
-		err = fs.RenameError
-		return
+		return fs.RenameError
+	}
+
+	if fs.GetFileTestStat(filepath.Dir(newPath)) == nil {
+		return errors.New("Parent directory does not exist")
 	}
 
 	stats := fs.GetFileTestStat(oldPath)
 	if stats == nil {
-		err = errors.New("Old path did not exist")
-		return
+		return errors.New("Old path did not exist")
 	}
 
 	fs.RenameOldPaths = append(fs.RenameOldPaths, oldPath)
@@ -182,9 +215,10 @@ func (fs *FakeFileSystem) Rename(oldPath, newPath string) (err error) {
 	newStats.FileMode = stats.FileMode
 	newStats.FileType = stats.FileType
 
+	// Ignore error from RemoveAll
 	fs.RemoveAll(oldPath)
 
-	return
+	return nil
 }
 
 func (fs *FakeFileSystem) Symlink(oldPath, newPath string) (err error) {
@@ -199,36 +233,17 @@ func (fs *FakeFileSystem) Symlink(oldPath, newPath string) (err error) {
 	return
 }
 
-func (fs *FakeFileSystem) ReadLink(symlinkPath string) (targetPath string, err error) {
+func (fs *FakeFileSystem) ReadLink(symlinkPath string) (string, error) {
+	if fs.ReadLinkError != nil {
+		return "", fs.ReadLinkError
+	}
+
 	stat := fs.GetFileTestStat(symlinkPath)
 	if stat != nil {
-		targetPath = stat.SymlinkTarget
-	} else {
-		err = os.ErrNotExist
+		return stat.SymlinkTarget, nil
 	}
 
-	return
-}
-
-func (fs *FakeFileSystem) CopyDirEntries(srcPath, dstPath string) (err error) {
-	if fs.CopyDirEntriesError != nil {
-		return fs.CopyDirEntriesError
-	}
-
-	filesToCopy := []string{}
-
-	for filePath, _ := range fs.Files {
-		if strings.HasPrefix(filePath, srcPath) {
-			filesToCopy = append(filesToCopy, filePath)
-		}
-	}
-
-	for _, filePath := range filesToCopy {
-		newPath := strings.Replace(filePath, srcPath, dstPath, 1)
-		fs.Files[newPath] = fs.Files[filePath]
-	}
-
-	return
+	return "", os.ErrNotExist
 }
 
 func (fs *FakeFileSystem) CopyFile(srcPath, dstPath string) (err error) {
@@ -237,7 +252,7 @@ func (fs *FakeFileSystem) CopyFile(srcPath, dstPath string) (err error) {
 		return
 	}
 
-	fs.Files[dstPath] = fs.Files[srcPath]
+	fs.files[dstPath] = fs.files[srcPath]
 	return
 }
 
@@ -245,21 +260,21 @@ func (fs *FakeFileSystem) TempFile(prefix string) (file *os.File, err error) {
 	if fs.TempFileError != nil {
 		return nil, fs.TempFileError
 	}
+
 	if fs.ReturnTempFile != nil {
 		return fs.ReturnTempFile, nil
-	} else {
-		file, err = os.Open("/dev/null")
-		if err != nil {
-			err = bosherr.WrapError(err, "Opening /dev/null")
-			return
-		}
+	}
 
-		// Make sure to record a reference for FileExist, etc. to work
-		stats := fs.getOrCreateFile(file.Name())
-		stats.FileType = FakeFileTypeFile
-
+	file, err = os.Open("/dev/null")
+	if err != nil {
+		err = bosherr.WrapError(err, "Opening /dev/null")
 		return
 	}
+
+	// Make sure to record a reference for FileExist, etc. to work
+	stats := fs.getOrCreateFile(file.Name())
+	stats.FileType = FakeFileTypeFile
+	return
 }
 
 func (fs *FakeFileSystem) TempDir(prefix string) (string, error) {
@@ -286,27 +301,33 @@ func (fs *FakeFileSystem) TempDir(prefix string) (string, error) {
 	return path, nil
 }
 
+func (fs *FakeFileSystem) RegisterRemoveAllError(path string, err error) {
+	if _, ok := fs.removeAllErrorByPath[path]; ok {
+		panic(fmt.Sprintf("RemoveAll error is already set for path: %s", path))
+	}
+	fs.removeAllErrorByPath[path] = err
+}
+
 func (fs *FakeFileSystem) RemoveAll(path string) (err error) {
 	if fs.RemoveAllError != nil {
 		return fs.RemoveAllError
 	}
 
+	if fs.removeAllErrorByPath[path] != nil {
+		return fs.removeAllErrorByPath[path]
+	}
+
 	filesToRemove := []string{}
 
-	for name, _ := range fs.Files {
+	for name := range fs.files {
 		if strings.HasPrefix(name, path) {
 			filesToRemove = append(filesToRemove, name)
 		}
 	}
 
 	for _, name := range filesToRemove {
-		delete(fs.Files, name)
+		delete(fs.files, name)
 	}
-	return
-}
-
-func (fs *FakeFileSystem) Open(path string) (file *os.File, err error) {
-	file = fs.FilesToOpen[path]
 	return
 }
 
@@ -320,7 +341,7 @@ func (fs *FakeFileSystem) Glob(pattern string) (matches []string, err error) {
 	} else {
 		matches = []string{}
 	}
-	return
+	return matches, fs.GlobErr
 }
 
 func (fs *FakeFileSystem) SetGlob(pattern string, matches ...[]string) {
@@ -331,12 +352,12 @@ func (fs *FakeFileSystem) SetGlob(pattern string, matches ...[]string) {
 func (fs *FakeFileSystem) getOrCreateFile(path string) (stats *FakeFileStats) {
 	stats = fs.GetFileTestStat(path)
 	if stats == nil {
-		if fs.Files == nil {
-			fs.Files = make(map[string]*FakeFileStats)
+		if fs.files == nil {
+			fs.files = make(map[string]*FakeFileStats)
 		}
 
 		stats = new(FakeFileStats)
-		fs.Files[path] = stats
+		fs.files[path] = stats
 	}
 	return
 }

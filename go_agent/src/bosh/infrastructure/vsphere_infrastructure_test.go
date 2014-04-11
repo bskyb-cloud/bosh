@@ -1,17 +1,19 @@
 package infrastructure_test
 
 import (
+	"os"
+	"time"
+
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
+
 	. "bosh/infrastructure"
-	boshdevicepathresolver "bosh/infrastructure/device_path_resolver"
+	fakedpresolv "bosh/infrastructure/devicepathresolver/fakes"
 	boshlog "bosh/logger"
 	boshdisk "bosh/platform/disk"
 	fakeplatform "bosh/platform/fakes"
 	boshsettings "bosh/settings"
 	fakesys "bosh/system/fakes"
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
-	"os"
-	"time"
 )
 
 func init() {
@@ -20,13 +22,13 @@ func init() {
 			logger                 boshlog.Logger
 			vsphere                Infrastructure
 			platform               *fakeplatform.FakePlatform
-			fakeDevicePathResolver *boshdevicepathresolver.FakeDevicePathResolver
+			fakeDevicePathResolver *fakedpresolv.FakeDevicePathResolver
 		)
 
 		BeforeEach(func() {
 			platform = fakeplatform.NewFakePlatform()
-			fakeDevicePathResolver = boshdevicepathresolver.NewFakeDevicePathResolver(1*time.Millisecond, platform.GetFs())
-			logger = boshlog.NewLogger(boshlog.LEVEL_NONE)
+			fakeDevicePathResolver = fakedpresolv.NewFakeDevicePathResolver(1*time.Millisecond, platform.GetFs())
+			logger = boshlog.NewLogger(boshlog.LevelNone)
 		})
 
 		JustBeforeEach(func() {
@@ -41,7 +43,7 @@ func init() {
 				Expect(err).NotTo(HaveOccurred())
 
 				Expect(platform.GetFileContentsFromCDROMPath).To(Equal("env"))
-				Expect(settings.AgentId).To(Equal("123"))
+				Expect(settings.AgentID).To(Equal("123"))
 			})
 		})
 

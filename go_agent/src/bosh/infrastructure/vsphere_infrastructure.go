@@ -2,7 +2,7 @@ package infrastructure
 
 import (
 	bosherr "bosh/errors"
-	boshdevicepathresolver "bosh/infrastructure/device_path_resolver"
+	boshdpresolv "bosh/infrastructure/devicepathresolver"
 	boshlog "bosh/logger"
 	boshplatform "bosh/platform"
 	boshdisk "bosh/platform/disk"
@@ -16,10 +16,10 @@ type vsphereInfrastructure struct {
 	logger             boshlog.Logger
 	platform           boshplatform.Platform
 	diskWaitTimeout    time.Duration
-	devicePathResolver boshdevicepathresolver.DevicePathResolver
+	devicePathResolver boshdpresolv.DevicePathResolver
 }
 
-func NewVsphereInfrastructure(platform boshplatform.Platform, devicePathResolver boshdevicepathresolver.DevicePathResolver, logger boshlog.Logger) (inf vsphereInfrastructure) {
+func NewVsphereInfrastructure(platform boshplatform.Platform, devicePathResolver boshdpresolv.DevicePathResolver, logger boshlog.Logger) (inf vsphereInfrastructure) {
 	inf.platform = platform
 	inf.logger = logger
 	inf.devicePathResolver = devicePathResolver
@@ -27,7 +27,7 @@ func NewVsphereInfrastructure(platform boshplatform.Platform, devicePathResolver
 	return
 }
 
-func (inf vsphereInfrastructure) GetDevicePathResolver() boshdevicepathresolver.DevicePathResolver {
+func (inf vsphereInfrastructure) GetDevicePathResolver() boshdpresolv.DevicePathResolver {
 	return inf.devicePathResolver
 }
 
@@ -62,12 +62,12 @@ func (inf vsphereInfrastructure) GetEphemeralDiskPath(string) (realPath string, 
 	return "/dev/sdb", true
 }
 
-func (inf vsphereInfrastructure) MountPersistentDisk(volumeId string, mountPoint string) (err error) {
+func (inf vsphereInfrastructure) MountPersistentDisk(volumeID string, mountPoint string) (err error) {
 	inf.logger.Debug("disks", "Mounting persistent disks")
 
 	inf.platform.GetFs().MkdirAll(mountPoint, os.FileMode(0700))
 
-	realPath, err := inf.devicePathResolver.GetRealDevicePath(volumeId)
+	realPath, err := inf.devicePathResolver.GetRealDevicePath(volumeID)
 
 	if err != nil {
 		err = bosherr.WrapError(err, "Getting real device path")

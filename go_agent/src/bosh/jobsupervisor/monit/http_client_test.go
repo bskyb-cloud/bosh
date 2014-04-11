@@ -1,206 +1,269 @@
 package monit_test
 
 import (
-	. "bosh/jobsupervisor/monit"
-	"bosh/jobsupervisor/monit/http_fakes"
-	boshlog "bosh/logger"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"time"
 
 	. "github.com/onsi/ginkgo"
-	"time"
+	. "github.com/onsi/gomega"
+
+	. "bosh/jobsupervisor/monit"
+	fakemonit "bosh/jobsupervisor/monit/fakes"
+	boshlog "bosh/logger"
 )
 
 func init() {
-	Describe("Testing with Ginkgo", func() {
+	Describe("httpClient", func() {
 		var (
-			logger = boshlog.NewLogger(boshlog.LEVEL_NONE)
+			logger = boshlog.NewLogger(boshlog.LevelNone)
 		)
-		It("services in group returns services when found", func() {
-		})
-		It("services in group errors when not found", func() {
-		})
-		It("start service", func() {
 
-			var calledMonit bool
+		It("services in group returns services when found", func() {})
 
-			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calledMonit = true
-				assert.Equal(GinkgoT(), r.Method, "POST")
-				assert.Equal(GinkgoT(), r.URL.Path, "/test-service")
-				assert.Equal(GinkgoT(), r.PostFormValue("action"), "start")
-				assert.Equal(GinkgoT(), r.Header.Get("Content-Type"), "application/x-www-form-urlencoded")
+		It("services in group errors when not found", func() {})
 
-				expectedAuthEncoded := base64.URLEncoding.EncodeToString([]byte("fake-user:fake-pass"))
-				assert.Equal(GinkgoT(), r.Header.Get("Authorization"), fmt.Sprintf("Basic %s", expectedAuthEncoded))
+		Describe("StartService", func() {
+			It("start service", func() {
+				var calledMonit bool
+
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calledMonit = true
+					Expect(r.Method).To(Equal("POST"))
+					Expect(r.URL.Path).To(Equal("/test-service"))
+					Expect(r.PostFormValue("action")).To(Equal("start"))
+					Expect(r.Header.Get("Content-Type")).To(Equal("application/x-www-form-urlencoded"))
+
+					expectedAuthEncoded := base64.URLEncoding.EncodeToString([]byte("fake-user:fake-pass"))
+					Expect(r.Header.Get("Authorization")).To(Equal(fmt.Sprintf("Basic %s", expectedAuthEncoded)))
+				})
+				ts := httptest.NewServer(handler)
+				defer ts.Close()
+
+				client := NewHTTPClient(ts.Listener.Addr().String(), "fake-user", "fake-pass", http.DefaultClient, 1*time.Millisecond, logger)
+
+				err := client.StartService("test-service")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(calledMonit).To(BeTrue())
 			})
-			ts := httptest.NewServer(handler)
-			defer ts.Close()
 
-			client := NewHttpClient(ts.Listener.Addr().String(), "fake-user", "fake-pass", http.DefaultClient, 1*time.Millisecond, logger)
+			It("start service retries when non200 response", func() {
+				fakeHTTPClient := fakemonit.NewFakeHTTPClient()
+				fakeHTTPClient.StatusCode = 500
+				fakeHTTPClient.SetMessage("fake error message")
 
-			err := client.StartService("test-service")
-			assert.NoError(GinkgoT(), err)
-			assert.True(GinkgoT(), calledMonit)
-		})
-		It("start service retries when non200 response", func() {
+				client := NewHTTPClient("agent.example.com", "fake-user", "fake-pass", fakeHTTPClient, 1*time.Millisecond, logger)
 
-			fakeHttpClient := http_fakes.NewFakeHttpClient()
-			fakeHttpClient.StatusCode = 500
-			fakeHttpClient.SetMessage("fake error message")
-
-			client := NewHttpClient("agent.example.com", "fake-user", "fake-pass", fakeHttpClient, 1*time.Millisecond, logger)
-
-			err := client.StartService("test-service")
-			assert.Equal(GinkgoT(), fakeHttpClient.CallCount, 20)
-			assert.Error(GinkgoT(), err)
-		})
-		It("start service retries when connection refused", func() {
-
-			fakeHttpClient := http_fakes.NewFakeHttpClient()
-			fakeHttpClient.SetNilResponse()
-			fakeHttpClient.Error = errors.New("some error")
-
-			client := NewHttpClient("agent.example.com", "fake-user", "fake-pass", fakeHttpClient, 1*time.Millisecond, logger)
-
-			err := client.StartService("test-service")
-			assert.Equal(GinkgoT(), fakeHttpClient.CallCount, 20)
-			assert.Error(GinkgoT(), err)
-		})
-		It("stop service", func() {
-
-			var calledMonit bool
-
-			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calledMonit = true
-				assert.Equal(GinkgoT(), r.Method, "POST")
-				assert.Equal(GinkgoT(), r.URL.Path, "/test-service")
-				assert.Equal(GinkgoT(), r.PostFormValue("action"), "stop")
-				assert.Equal(GinkgoT(), r.Header.Get("Content-Type"), "application/x-www-form-urlencoded")
-
-				expectedAuthEncoded := base64.URLEncoding.EncodeToString([]byte("fake-user:fake-pass"))
-				assert.Equal(GinkgoT(), r.Header.Get("Authorization"), fmt.Sprintf("Basic %s", expectedAuthEncoded))
+				err := client.StartService("test-service")
+				Expect(fakeHTTPClient.CallCount).To(Equal(20))
+				Expect(err).To(HaveOccurred())
 			})
-			ts := httptest.NewServer(handler)
-			defer ts.Close()
 
-			client := NewHttpClient(ts.Listener.Addr().String(), "fake-user", "fake-pass", http.DefaultClient, 1*time.Millisecond, logger)
+			It("start service retries when connection refused", func() {
+				fakeHTTPClient := fakemonit.NewFakeHTTPClient()
+				fakeHTTPClient.SetNilResponse()
+				fakeHTTPClient.Error = errors.New("some error")
 
-			err := client.StopService("test-service")
-			assert.NoError(GinkgoT(), err)
-			assert.True(GinkgoT(), calledMonit)
-		})
-		It("stop service retries when non200 response", func() {
+				client := NewHTTPClient("agent.example.com", "fake-user", "fake-pass", fakeHTTPClient, 1*time.Millisecond, logger)
 
-			fakeHttpClient := http_fakes.NewFakeHttpClient()
-			fakeHttpClient.StatusCode = 500
-			fakeHttpClient.SetMessage("fake error message")
-
-			client := NewHttpClient("agent.example.com", "fake-user", "fake-pass", fakeHttpClient, 1*time.Millisecond, logger)
-
-			err := client.StopService("test-service")
-			assert.Equal(GinkgoT(), fakeHttpClient.CallCount, 20)
-			assert.Error(GinkgoT(), err)
-			assert.Contains(GinkgoT(), err.Error(), "fake error message")
-		})
-		It("stop service retries when connection refused", func() {
-
-			fakeHttpClient := http_fakes.NewFakeHttpClient()
-			fakeHttpClient.SetNilResponse()
-			fakeHttpClient.Error = errors.New("some error")
-
-			client := NewHttpClient("agent.example.com", "fake-user", "fake-pass", fakeHttpClient, 1*time.Millisecond, logger)
-
-			err := client.StopService("test-service")
-			assert.Equal(GinkgoT(), fakeHttpClient.CallCount, 20)
-			assert.Error(GinkgoT(), err)
-			assert.Contains(GinkgoT(), err.Error(), "some error")
-		})
-		It("services in group", func() {
-
-			monitStatusFilePath, _ := filepath.Abs("../../../../fixtures/monit_status.xml")
-			assert.NotNil(GinkgoT(), monitStatusFilePath)
-
-			file, err := os.Open(monitStatusFilePath)
-			assert.NoError(GinkgoT(), err)
-			defer file.Close()
-
-			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				io.Copy(w, file)
-				assert.Equal(GinkgoT(), r.Method, "GET")
-				assert.Equal(GinkgoT(), r.URL.Path, "/_status2")
-				assert.Equal(GinkgoT(), r.URL.Query().Get("format"), "xml")
+				err := client.StartService("test-service")
+				Expect(fakeHTTPClient.CallCount).To(Equal(20))
+				Expect(err).To(HaveOccurred())
 			})
-			ts := httptest.NewServer(handler)
-			defer ts.Close()
-
-			client := NewHttpClient(ts.Listener.Addr().String(), "fake-user", "fake-pass", http.DefaultClient, 1*time.Millisecond, logger)
-
-			services, err := client.ServicesInGroup("vcap")
-			assert.NoError(GinkgoT(), err)
-			assert.Equal(GinkgoT(), []string{"dummy"}, services)
 		})
-		It("decode status", func() {
 
-			monitStatusFilePath, _ := filepath.Abs("../../../../fixtures/monit_status.xml")
-			assert.NotNil(GinkgoT(), monitStatusFilePath)
+		Describe("StopService", func() {
+			It("stop service", func() {
+				var calledMonit bool
 
-			file, err := os.Open(monitStatusFilePath)
-			assert.NoError(GinkgoT(), err)
-			defer file.Close()
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calledMonit = true
+					Expect(r.Method).To(Equal("POST"))
+					Expect(r.URL.Path).To(Equal("/test-service"))
+					Expect(r.PostFormValue("action")).To(Equal("stop"))
+					Expect(r.Header.Get("Content-Type")).To(Equal("application/x-www-form-urlencoded"))
 
-			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				io.Copy(w, file)
-				assert.Equal(GinkgoT(), r.Method, "GET")
-				assert.Equal(GinkgoT(), r.URL.Path, "/_status2")
-				assert.Equal(GinkgoT(), r.URL.Query().Get("format"), "xml")
+					expectedAuthEncoded := base64.URLEncoding.EncodeToString([]byte("fake-user:fake-pass"))
+					Expect(r.Header.Get("Authorization")).To(Equal(fmt.Sprintf("Basic %s", expectedAuthEncoded)))
+				})
+				ts := httptest.NewServer(handler)
+				defer ts.Close()
+
+				client := NewHTTPClient(ts.Listener.Addr().String(), "fake-user", "fake-pass", http.DefaultClient, 1*time.Millisecond, logger)
+
+				err := client.StopService("test-service")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(calledMonit).To(BeTrue())
 			})
-			ts := httptest.NewServer(handler)
-			defer ts.Close()
 
-			client := NewHttpClient(ts.Listener.Addr().String(), "fake-user", "fake-pass", http.DefaultClient, 1*time.Millisecond, logger)
+			It("stop service retries when non200 response", func() {
+				fakeHTTPClient := fakemonit.NewFakeHTTPClient()
+				fakeHTTPClient.StatusCode = 500
+				fakeHTTPClient.SetMessage("fake error message")
 
-			status, err := client.Status()
-			assert.NoError(GinkgoT(), err)
-			dummyServices := status.ServicesInGroup("vcap")
-			assert.Equal(GinkgoT(), 1, len(dummyServices))
+				client := NewHTTPClient("agent.example.com", "fake-user", "fake-pass", fakeHTTPClient, 1*time.Millisecond, logger)
+
+				err := client.StopService("test-service")
+				Expect(fakeHTTPClient.CallCount).To(Equal(20))
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("fake error message"))
+			})
+
+			It("stop service retries when connection refused", func() {
+				fakeHTTPClient := fakemonit.NewFakeHTTPClient()
+				fakeHTTPClient.SetNilResponse()
+				fakeHTTPClient.Error = errors.New("some error")
+
+				client := NewHTTPClient("agent.example.com", "fake-user", "fake-pass", fakeHTTPClient, 1*time.Millisecond, logger)
+
+				err := client.StopService("test-service")
+				Expect(fakeHTTPClient.CallCount).To(Equal(20))
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("some error"))
+			})
 		})
 
-		It("status retries when non200 response", func() {
-			fakeHttpClient := http_fakes.NewFakeHttpClient()
-			fakeHttpClient.StatusCode = 500
-			fakeHttpClient.SetMessage("fake error message")
+		Describe("UnmonitorService", func() {
+			It("issues a call to unmontor service by name", func() {
+				var calledMonit bool
 
-			client := NewHttpClient("agent.example.com", "fake-user", "fake-pass", fakeHttpClient, 1*time.Millisecond, logger)
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calledMonit = true
+					Expect(r.Method).To(Equal("POST"))
+					Expect(r.URL.Path).To(Equal("/test-service"))
+					Expect(r.PostFormValue("action")).To(Equal("unmonitor"))
+					Expect(r.Header.Get("Content-Type")).To(Equal("application/x-www-form-urlencoded"))
 
-			_, err := client.Status()
-			assert.Equal(GinkgoT(), fakeHttpClient.CallCount, 20)
-			assert.Error(GinkgoT(), err)
-			assert.Contains(GinkgoT(), err.Error(), "fake error message")
+					expectedAuthEncoded := base64.URLEncoding.EncodeToString([]byte("fake-user:fake-pass"))
+					Expect(r.Header.Get("Authorization")).To(Equal(fmt.Sprintf("Basic %s", expectedAuthEncoded)))
+				})
+
+				ts := httptest.NewServer(handler)
+				defer ts.Close()
+
+				client := NewHTTPClient(ts.Listener.Addr().String(), "fake-user", "fake-pass", http.DefaultClient, 1*time.Millisecond, logger)
+
+				err := client.UnmonitorService("test-service")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(calledMonit).To(BeTrue())
+			})
+
+			It("retries when non200 response", func() {
+				fakeHTTPClient := fakemonit.NewFakeHTTPClient()
+				fakeHTTPClient.StatusCode = 500
+				fakeHTTPClient.SetMessage("fake-http-response-message")
+
+				client := NewHTTPClient("agent.example.com", "fake-user", "fake-pass", fakeHTTPClient, 1*time.Millisecond, logger)
+
+				err := client.UnmonitorService("test-service")
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("fake-http-response-message"))
+
+				Expect(fakeHTTPClient.CallCount).To(Equal(20))
+			})
+
+			It("retries when connection refused", func() {
+				fakeHTTPClient := fakemonit.NewFakeHTTPClient()
+				fakeHTTPClient.SetNilResponse()
+				fakeHTTPClient.Error = errors.New("fake-http-error")
+
+				client := NewHTTPClient("agent.example.com", "fake-user", "fake-pass", fakeHTTPClient, 1*time.Millisecond, logger)
+
+				err := client.UnmonitorService("test-service")
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("fake-http-error"))
+
+				Expect(fakeHTTPClient.CallCount).To(Equal(20))
+			})
 		})
 
-		It("status retries when connection refused", func() {
-			fakeHttpClient := http_fakes.NewFakeHttpClient()
-			fakeHttpClient.SetNilResponse()
-			fakeHttpClient.Error = errors.New("some error")
+		Describe("ServicesInGroup", func() {
+			It("services in group", func() {
+				monitStatusFilePath, _ := filepath.Abs("../../../../fixtures/monit_status.xml")
+				Expect(monitStatusFilePath).ToNot(BeNil())
 
-			client := NewHttpClient("agent.example.com", "fake-user", "fake-pass", fakeHttpClient, 1*time.Millisecond, logger)
+				file, err := os.Open(monitStatusFilePath)
+				Expect(err).ToNot(HaveOccurred())
+				defer file.Close()
 
-			err := client.StartService("hello")
-			assert.Equal(GinkgoT(), fakeHttpClient.CallCount, 20)
-			assert.Error(GinkgoT(), err)
-			assert.Contains(GinkgoT(), err.Error(), "some error")
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					io.Copy(w, file)
+					Expect(r.Method).To(Equal("GET"))
+					Expect(r.URL.Path).To(Equal("/_status2"))
+					Expect(r.URL.Query().Get("format")).To(Equal("xml"))
+				})
+				ts := httptest.NewServer(handler)
+				defer ts.Close()
 
-			for _, req := range fakeHttpClient.RequestBodies {
-				assert.Equal(GinkgoT(), req, "action=start")
-			}
+				client := NewHTTPClient(ts.Listener.Addr().String(), "fake-user", "fake-pass", http.DefaultClient, 1*time.Millisecond, logger)
+
+				services, err := client.ServicesInGroup("vcap")
+				Expect(err).ToNot(HaveOccurred())
+				Expect([]string{"dummy"}).To(Equal(services))
+			})
+		})
+
+		Describe("Status", func() {
+			It("decode status", func() {
+				monitStatusFilePath, _ := filepath.Abs("../../../../fixtures/monit_status.xml")
+				Expect(monitStatusFilePath).ToNot(BeNil())
+
+				file, err := os.Open(monitStatusFilePath)
+				Expect(err).ToNot(HaveOccurred())
+				defer file.Close()
+
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					io.Copy(w, file)
+					Expect(r.Method).To(Equal("GET"))
+					Expect(r.URL.Path).To(Equal("/_status2"))
+					Expect(r.URL.Query().Get("format")).To(Equal("xml"))
+				})
+				ts := httptest.NewServer(handler)
+				defer ts.Close()
+
+				client := NewHTTPClient(ts.Listener.Addr().String(), "fake-user", "fake-pass", http.DefaultClient, 1*time.Millisecond, logger)
+
+				status, err := client.Status()
+				Expect(err).ToNot(HaveOccurred())
+				dummyServices := status.ServicesInGroup("vcap")
+				Expect(1).To(Equal(len(dummyServices)))
+			})
+
+			It("status retries when non200 response", func() {
+				fakeHTTPClient := fakemonit.NewFakeHTTPClient()
+				fakeHTTPClient.StatusCode = 500
+				fakeHTTPClient.SetMessage("fake error message")
+
+				client := NewHTTPClient("agent.example.com", "fake-user", "fake-pass", fakeHTTPClient, 1*time.Millisecond, logger)
+
+				_, err := client.Status()
+				Expect(fakeHTTPClient.CallCount).To(Equal(20))
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("fake error message"))
+			})
+
+			It("status retries when connection refused", func() {
+				fakeHTTPClient := fakemonit.NewFakeHTTPClient()
+				fakeHTTPClient.SetNilResponse()
+				fakeHTTPClient.Error = errors.New("some error")
+
+				client := NewHTTPClient("agent.example.com", "fake-user", "fake-pass", fakeHTTPClient, 1*time.Millisecond, logger)
+
+				err := client.StartService("hello")
+				Expect(fakeHTTPClient.CallCount).To(Equal(20))
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("some error"))
+
+				for _, req := range fakeHTTPClient.RequestBodies {
+					Expect(req).To(Equal("action=start"))
+				}
+			})
 		})
 	})
 }

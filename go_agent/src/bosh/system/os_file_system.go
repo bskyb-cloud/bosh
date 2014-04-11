@@ -196,12 +196,12 @@ func (fs osFileSystem) Symlink(oldPath, newPath string) (err error) {
 	if err == nil {
 		if existingTargetedPath == actualOldPath {
 			return
-		} else {
-			err = os.Remove(newPath)
-			if err != nil {
-				err = bosherr.WrapError(err, "Failed to delete symlimk at %s", newPath)
-				return
-			}
+		}
+
+		err = os.Remove(newPath)
+		if err != nil {
+			err = bosherr.WrapError(err, "Failed to delete symlimk at %s", newPath)
+			return
 		}
 	}
 
@@ -215,11 +215,6 @@ func (fs osFileSystem) Symlink(oldPath, newPath string) (err error) {
 
 func (fs osFileSystem) ReadLink(symlinkPath string) (targetPath string, err error) {
 	targetPath, err = os.Readlink(symlinkPath)
-	return
-}
-
-func (fs osFileSystem) CopyDirEntries(srcPath, dstPath string) (err error) {
-	_, _, err = fs.runner.RunCommand("cp", "-r", srcPath+"/.", dstPath)
 	return
 }
 
@@ -259,11 +254,6 @@ func (fs osFileSystem) RemoveAll(fileOrDir string) (err error) {
 	fs.logger.Debug(fs.logTag, "Remove all %s", fileOrDir)
 	err = os.RemoveAll(fileOrDir)
 	return
-}
-
-func (fs osFileSystem) Open(path string) (file *os.File, err error) {
-	fs.logger.Debug(fs.logTag, "Open %s", path)
-	return os.Open(path)
 }
 
 func (fs osFileSystem) Glob(pattern string) (matches []string, err error) {

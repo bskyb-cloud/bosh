@@ -98,7 +98,14 @@ func (app *app) Setup(args []string) (err error) {
 		return
 	}
 
-	jobSupervisorProvider := boshjobsuper.NewProvider(app.platform, monitClient, app.logger, dirProvider)
+	jobSupervisorProvider := boshjobsuper.NewProvider(
+		app.platform,
+		monitClient,
+		app.logger,
+		dirProvider,
+		mbusHandler,
+	)
+
 	jobSupervisor, err := jobSupervisorProvider.Get(opts.JobSupervisor)
 	if err != nil {
 		err = bosherr.WrapError(err, "Getting job supervisor")
@@ -109,24 +116,46 @@ func (app *app) Setup(args []string) (err error) {
 
 	installPath := dirProvider.DataDir()
 
-	jobsBc := bc.NewFileBundleCollection(installPath, dirProvider.BaseDir(), "jobs", app.platform.GetFs())
+	jobsBc := bc.NewFileBundleCollection(
+		installPath,
+		dirProvider.BaseDir(),
+		"jobs",
+		app.platform.GetFs(),
+		app.logger,
+	)
 
 	jobApplier := ja.NewRenderedJobApplier(
 		jobsBc,
 		blobstore,
 		app.platform.GetCompressor(),
+		app.platform.GetFs(),
 		jobSupervisor,
+		app.logger,
 	)
 
-	packagesBc := bc.NewFileBundleCollection(installPath, dirProvider.BaseDir(), "packages", app.platform.GetFs())
+	packagesBc := bc.NewFileBundleCollection(
+		installPath,
+		dirProvider.BaseDir(),
+		"packages",
+		app.platform.GetFs(),
+		app.logger,
+	)
 
 	packageApplier := pa.NewConcretePackageApplier(
 		packagesBc,
 		blobstore,
 		app.platform.GetCompressor(),
+		app.platform.GetFs(),
+		app.logger,
 	)
 
-	applier := boshapplier.NewConcreteApplier(jobApplier, packageApplier, app.platform, jobSupervisor, dirProvider)
+	applier := boshapplier.NewConcreteApplier(
+		jobApplier,
+		packageApplier,
+		app.platform,
+		jobSupervisor,
+		dirProvider,
+	)
 
 	compiler := boshcomp.NewConcreteCompiler(
 		app.platform.GetCompressor(),
@@ -150,7 +179,12 @@ func (app *app) Setup(args []string) (err error) {
 
 	specFilePath := filepath.Join(dirProvider.BoshDir(), "spec.json")
 	specService := boshas.NewConcreteV1Service(app.platform.GetFs(), specFilePath)
-	drainScriptProvider := boshdrain.NewConcreteDrainScriptProvider(app.platform.GetRunner(), app.platform.GetFs(), dirProvider)
+
+	drainScriptProvider := boshdrain.NewConcreteDrainScriptProvider(
+		app.platform.GetRunner(),
+		app.platform.GetFs(),
+		dirProvider,
+	)
 
 	actionFactory := boshaction.NewFactory(
 		settingsService,
@@ -166,11 +200,29 @@ func (app *app) Setup(args []string) (err error) {
 		drainScriptProvider,
 		app.logger,
 	)
+
 	actionRunner := boshaction.NewRunner()
-	actionDispatcher := boshagent.NewActionDispatcher(app.logger, taskService, taskManager, actionFactory, actionRunner)
+
+	actionDispatcher := boshagent.NewActionDispatcher(
+		app.logger,
+		taskService,
+		taskManager,
+		actionFactory,
+		actionRunner,
+	)
+
 	alertBuilder := boshalert.NewBuilder(settingsService, app.logger)
 
-	app.agent = boshagent.New(app.logger, mbusHandler, app.platform, actionDispatcher, alertBuilder, jobSupervisor, time.Minute)
+	app.agent = boshagent.New(
+		app.logger,
+		mbusHandler,
+		app.platform,
+		actionDispatcher,
+		alertBuilder,
+		jobSupervisor,
+		specService,
+		time.Minute,
+	)
 
 	return
 }

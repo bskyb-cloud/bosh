@@ -1,190 +1,154 @@
 require 'spec_helper'
 
 describe Bosh::Director::JobUpdater do
-  subject(:job_updater) { described_class.new(@deployment_plan, @job_spec) }
-
-  before do
-    @deployment_plan = double("deployment_plan")
-    @update_spec = double("update_spec", max_in_flight: 5, canaries: 1)
-    @job_spec = double("job_spec", update: @update_spec, name: 'job_name')
+  subject(:job_updater) { described_class.new(deployment_plan, job) }
+  let(:deployment_plan) { instance_double('Bosh::Director::DeploymentPlan') }
+  let(:job) do
+    instance_double('Bosh::Director::DeploymentPlan::Job',
+      name: 'job_name',
+      update: update_config,
+      unneeded_instances: [])
   end
 
-  before { Bosh::Director::Config.stub(:cloud).and_return(nil) }
-
-  it "should do nothing when the job is up to date" do
-    instance_1 = double("instance-1")
-    instance_1.stub(:index).and_return(1)
-    instance_2 = double("instance-1")
-    instance_2.stub(:index).and_return(2)
-
-    instances = [instance_1, instance_2]
-
-    @job_spec.should_receive(:instances).and_return(instances)
-    @job_spec.should_receive(:unneeded_instances).and_return([])
-    instance_1.should_receive(:changed?).and_return(false)
-    instance_2.should_receive(:changed?).and_return(false)
-
-    job_updater.update
+  let(:update_config) do
+    instance_double('Bosh::Director::DeploymentPlan::UpdateConfig', canaries: 1, max_in_flight: 1)
   end
 
-  it "should update the job with canaries" do
-    instance_1 = double("instance-1")
-    instance_1.stub(:index).and_return(1)
-    instance_2 = double("instance-1")
-    instance_2.stub(:index).and_return(2)
-    instances = [instance_1, instance_2]
+  describe 'update' do
+    let(:instances) { [] }
+    before { allow(job).to receive(:instances).and_return(instances) }
 
-    instance_updater_1 = double("instance_updater_1")
-    instance_updater_2 = double("instance_updater_2")
+    let(:update_error) { RuntimeError.new('update failed') }
 
-    @job_spec.should_receive(:instances).and_return(instances)
-    @job_spec.should_receive(:unneeded_instances).and_return([])
-    @job_spec.stub(:should_halt?).and_return(false)
+    let(:instance_deleter) { instance_double('Bosh::Director::InstanceDeleter') }
+    before { allow(Bosh::Director::InstanceDeleter).to receive(:new).and_return(instance_deleter) }
 
-    instance_1.should_receive(:changed?).and_return(true)
-    instance_2.should_receive(:changed?).and_return(true)
+    context 'when job is up to date' do
+      let(:instances) do
+        [
+          instance_double('Bosh::Director::DeploymentPlan::Instance', changed?: false),
+        ]
+      end
 
-    instance_updater_1.should_receive(:update).with(:canary => true)
-    instance_updater_2.should_receive(:update).with(no_args)
+      it 'should do nothing' do
+        job_updater.update
 
-    Bosh::Director::InstanceUpdater.stub(:new).and_return do |instance, _|
-      case instance
-        when instance_1
-          instance_updater_1
-        when instance_2
-          instance_updater_2
-        else
-          raise "unknown instance"
+        check_event_log do |events|
+          expect(events).to be_empty
+        end
       end
     end
 
-    job_updater.update
+    context 'when job needs to be updated' do
+      let(:canary) { instance_double('Bosh::Director::DeploymentPlan::Instance', index: 1, changed?: true) }
+      let(:changed_instance) { instance_double('Bosh::Director::DeploymentPlan::Instance', index: 2, changed?: true) }
+      let(:unchanged_instance) do
+        instance_double('Bosh::Director::DeploymentPlan::Instance', index: 3, changed?: false)
+      end
 
-    check_event_log do |events|
-      events.size.should == 4
-      events.map { |e| e["stage"] }.uniq.should == ["Updating job"]
-      events.map { |e| e["tags"] }.uniq.should == [ ["job_name"] ]
-      events.map { |e| e["total"] }.uniq.should == [2]
-      events.map { |e| e["task"] }.should == ["job_name/1 (canary)", "job_name/1 (canary)", "job_name/2", "job_name/2"]
-    end
-  end
+      let(:instances) { [canary, changed_instance, unchanged_instance] }
 
-  it 'logs instance updates to event log ensuring that stage tags associations are preserved' do
-    event_log = instance_double('Bosh::Director::EventLog::Log')
-    Bosh::Director::Config.stub(:event_log).and_return(event_log)
+      let(:canary_updater) { instance_double('Bosh::Director::InstanceUpdater') }
+      let(:changed_updater) { instance_double('Bosh::Director::InstanceUpdater') }
+      let(:unchanged_updater) { instance_double('Bosh::Director::InstanceUpdater') }
 
-    event_log_stage = instance_double('Bosh::Director::EventLog::Stage')
-    event_log.stub(:begin_stage).with('Updating job', 2, ['job_name']).and_return(event_log_stage)
+      before do
+        allow(Bosh::Director::InstanceUpdater).to receive(:new).with(canary, anything).and_return(canary_updater)
+        allow(Bosh::Director::InstanceUpdater).to receive(:new).
+          with(changed_instance, anything).and_return(changed_updater)
+        allow(Bosh::Director::InstanceUpdater).to receive(:new).
+          with(unchanged_instance, anything).and_return(unchanged_updater)
+      end
 
-    # Using Stage for tracking task makes event log thread-safe
-    event_log_stage.should_receive(:advance_and_track).with('job_name/1 (canary)')
-    event_log_stage.should_receive(:advance_and_track).with('job_name/2')
+      it 'should update changed job instances with canaries' do
+        expect(canary_updater).to receive(:update).with(canary: true)
+        expect(changed_updater).to receive(:update).with(no_args)
+        expect(unchanged_updater).to_not receive(:update)
 
-    instance_1 = double('instance-1', index: 1)
-    instance_2 = double('instance-1', index: 2)
-    @job_spec.should_receive(:instances).and_return([instance_1, instance_2])
-    @job_spec.should_receive(:unneeded_instances).and_return([])
-    @job_spec.stub(:should_halt?).and_return(false)
+        job_updater.update
 
-    instance_1.should_receive(:changed?).and_return(true)
-    instance_2.should_receive(:changed?).and_return(true)
+        check_event_log do |events|
+          [
+            updating_stage_event(index: 1, total: 2, task: 'job_name/1 (canary)', state: 'started'),
+            updating_stage_event(index: 1, total: 2, task: 'job_name/1 (canary)', state: 'finished'),
+            updating_stage_event(index: 2, total: 2, task: 'job_name/2', state: 'started'),
+            updating_stage_event(index: 2, total: 2, task: 'job_name/2', state: 'finished'),
+          ].each_with_index do |expected_event, index|
+            expect(events[index]).to include(expected_event)
+          end
+        end
+      end
 
-    instance_updater = instance_double('Bosh::Director::InstanceUpdater', update: nil)
-    Bosh::Director::InstanceUpdater.stub(:new).and_return(instance_updater)
+      it 'should not continue updating changed job instances if canaries failed' do
+        expect(canary_updater).to receive(:update).with(canary: true).and_raise(update_error)
+        expect(changed_updater).to_not receive(:update)
+        expect(unchanged_updater).to_not receive(:update)
 
-    job_updater.update
-  end
+        expect { job_updater.update }.to raise_error(update_error)
 
-  it "should rollback the job if the canaries failed" do
-    instance_1 = double("instance-1")
-    instance_1.stub(:index).and_return(1)
-    instance_2 = double("instance-1")
-    instance_2.stub(:index).and_return(2)
-    instances = [instance_1, instance_2]
+        check_event_log do |events|
+          [
+            updating_stage_event(index: 1, total: 2, task: 'job_name/1 (canary)', state: 'started'),
+            updating_stage_event(index: 1, total: 2, task: 'job_name/1 (canary)', state: 'failed'),
+          ].each_with_index do |expected_event, index|
+            expect(events[index]).to include(expected_event)
+          end
+        end
+      end
 
-    instance_updater_1 = double("instance_updater_1")
-    instance_updater_2 = double("instance_updater_2")
+      it 'should raise an error if updating changed jobs instances failed' do
+        expect(canary_updater).to receive(:update).with(canary: true)
+        expect(changed_updater).to receive(:update).and_raise(update_error)
+        expect(unchanged_updater).to_not receive(:update)
 
-    @job_spec.stub(:should_halt?).and_return(false, true)
-    @job_spec.should_receive(:instances).and_return(instances)
-    @job_spec.should_receive(:record_update_error).with(anything, :canary => true)
-    @job_spec.should_receive(:unneeded_instances).and_return([])
-    @job_spec.stub(:halt_exception).and_return("bad update")
+        expect { job_updater.update }.to raise_error(update_error)
 
-    instance_1.should_receive(:changed?).and_return(true)
-    instance_2.should_receive(:changed?).and_return(true)
-
-    instance_updater_1.should_receive(:update).with(:canary => true).and_throw("bad update")
-    instance_updater_2.should_not_receive(:update).with(no_args)
-
-    Bosh::Director::InstanceUpdater.stub(:new).and_return do |instance, ticker|
-      case instance
-        when instance_1
-          instance_updater_1
-        when instance_2
-          instance_updater_2
-        else
-          raise "unknown instance"
+        check_event_log do |events|
+          [
+            updating_stage_event(index: 1, total: 2, task: 'job_name/1 (canary)', state: 'started'),
+            updating_stage_event(index: 1, total: 2, task: 'job_name/1 (canary)', state: 'finished'),
+            updating_stage_event(index: 2, total: 2, task: 'job_name/2', state: 'started'),
+            updating_stage_event(index: 2, total: 2, task: 'job_name/2', state: 'failed'),
+          ].each_with_index do |expected_event, index|
+            expect(events[index]).to include(expected_event)
+          end
+        end
       end
     end
 
-    lambda { job_updater.update }.should raise_exception(RuntimeError, "bad update")
-  end
+    context 'when the job has unneeded instances' do
+      let(:instance) { instance_double('Bosh::Director::DeploymentPlan::Instance') }
+      before { allow(job).to receive(:unneeded_instances).and_return([instance]) }
 
-  it "should rollback the job if it exceeded max number of errors" do
-    instance_1 = double("instance-1")
-    instance_1.stub(:index).and_return(1)
-    instance_2 = double("instance-1")
-    instance_2.stub(:index).and_return(2)
-    instances = [instance_1, instance_2]
+      it 'should delete the unneeded instances' do
+        allow(Bosh::Director::Config.event_log).to receive(:begin_stage).and_call_original
+        expect(Bosh::Director::Config.event_log).to receive(:begin_stage).
+          with('Deleting unneeded instances', 1, ['job_name'])
+        expect(instance_deleter).to receive(:delete_instances).
+          with([instance], instance_of(Bosh::Director::EventLog::Stage), { max_threads: 1 })
 
-    instance_updater_1 = double("instance_updater_1")
-    instance_updater_2 = double("instance_updater_2")
-
-    @job_spec.stub(:should_halt?).and_return(false, false, false, true)
-    @job_spec.should_receive(:unneeded_instances).and_return([])
-    @job_spec.should_receive(:instances).and_return(instances)
-    @job_spec.should_receive(:record_update_error).with(anything)
-    @job_spec.stub(:halt_exception).and_return("zb")
-
-    instance_1.should_receive(:changed?).and_return(true)
-    instance_2.should_receive(:changed?).and_return(true)
-
-    instance_updater_1.should_receive(:update).with(:canary => true)
-    instance_updater_2.should_receive(:update).with(no_args).and_throw("bad update")
-
-    Bosh::Director::InstanceUpdater.stub(:new).and_return do |instance, ticker|
-      case instance
-        when instance_1
-          instance_updater_1
-        when instance_2
-          instance_updater_2
-        else
-          raise "unknown instance"
+        job_updater.update
       end
     end
 
-    lambda { job_updater.update }.should raise_exception(RuntimeError, "zb")
-  end
+    context 'when the job has no unneeded instances' do
+      before { allow(job).to receive(:unneeded_instances).and_return([]) }
 
-  it "deletes unneeded instances" do
-    instance = double("instance")
-    @job_spec.stub(:instances).and_return([])
-    @job_spec.stub(:unneeded_instances).and_return([instance])
+      it 'should not delete instances if there are not any unneeded instances' do
+        expect(instance_deleter).to_not receive(:delete_instances)
+        job_updater.update
+      end
+    end
 
-    instance_deleter = instance_double('Bosh::Director::InstanceDeleter')
-    Bosh::Director::InstanceDeleter.stub(:new).with(@deployment_plan).and_return(instance_deleter)
-
-    event_log = instance_double('Bosh::Director::EventLog::Log')
-    Bosh::Director::Config.stub(:event_log).and_return(event_log)
-
-    event_log_stage = instance_double('Bosh::Director::EventLog::Stage')
-    event_log.stub(:begin_stage).with('Deleting unneeded instances', 1, ['job_name']).and_return(event_log_stage)
-
-    instance_deleter
-      .should_receive(:delete_instances)
-      .with([instance], event_log_stage, max_threads: 5)
-
-    job_updater.update
+    def updating_stage_event(options)
+      {
+        'stage' => 'Updating job',
+        'tags' => ['job_name'],
+        'index' => options[:index],
+        'total' => options[:total],
+        'task' => options[:task],
+        'state' => options[:state]
+      }
+    end
   end
 end

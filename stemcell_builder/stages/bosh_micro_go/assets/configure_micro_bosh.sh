@@ -1,6 +1,4 @@
 #!/bin/bash
-#
-# Copyright (c) 2009-2012 VMware, Inc.
 
 set -e
 
@@ -36,8 +34,7 @@ mkdir -p ${bosh_app_dir}/bosh/blob
 
 echo "Starting micro bosh compilation"
 
-
-cat > ${bosh_app_dir}/bosh/settings.json << EOF
+cat > ${bosh_app_dir}/bosh/dummy-cpi-agent-env.json << EOF
 {
   "agent_id": "not_configured",
   "mbus": "$agent_uri",
@@ -49,9 +46,11 @@ cat > ${bosh_app_dir}/bosh/settings.json << EOF
   }
 }
 EOF
+
 # Start agent
 /var/vcap/bosh/bin/bosh-agent -I dummy -P dummy -M dummy &
 agent_pid=$!
+
 echo "Starting BOSH Agent for compiling micro bosh package, agent pid is $agent_pid"
 
 # Wait for agent to start
@@ -75,20 +74,22 @@ bosh-release \
 
 function kill_agent {
   signal=$1
-  kill -$signal $agent_pid > /dev/null 2>&1
+  kill -$signal $agent_pid 2>&1
 }
 
-kill_agent 15
+kill_agent 15 || (echo "Agent failed while compiling bosh release" && exit 1)
 # Wait for agent
 for i in {1..5}
 do
-  kill_agent 0 && break
+  kill_agent 0 || break
   sleep 1
 done
+
 # Force kill if required
-kill_agent 0 || kill_agent 9
+(kill_agent 0 && kill_agent 9) || true
 
 # Clean out src
 cd /var/tmp
 rm -fr ${bosh_app_dir}/bosh/src
+rm ${bosh_app_dir}/bosh/dummy-cpi-agent-env.json
 rm ${bosh_app_dir}/bosh/settings.json

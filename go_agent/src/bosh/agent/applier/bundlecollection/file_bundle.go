@@ -1,91 +1,131 @@
 package bundlecollection
 
 import (
-	bosherr "bosh/errors"
-	boshsys "bosh/system"
 	"os"
 	"path/filepath"
+
+	bosherr "bosh/errors"
+	boshlog "bosh/logger"
+	boshsys "bosh/system"
+)
+
+const (
+	fileBundleLogTag = "FileBundle"
+	installDirsPerms = os.FileMode(0755)
+	enableDirPerms   = os.FileMode(0755)
 )
 
 type FileBundle struct {
 	installPath string
 	enablePath  string
 	fs          boshsys.FileSystem
+	logger      boshlog.Logger
 }
 
-func NewFileBundle(installPath, enablePath string, fs boshsys.FileSystem) FileBundle {
+func NewFileBundle(
+	installPath, enablePath string,
+	fs boshsys.FileSystem,
+	logger boshlog.Logger,
+) FileBundle {
 	return FileBundle{
 		installPath: installPath,
 		enablePath:  enablePath,
 		fs:          fs,
+		logger:      logger,
 	}
 }
 
-func (self FileBundle) Install() (fs boshsys.FileSystem, path string, err error) {
-	path = self.installPath
-	err = self.fs.MkdirAll(path, os.FileMode(0755))
+func (b FileBundle) Install(sourcePath string) (boshsys.FileSystem, string, error) {
+	b.logger.Debug(fileBundleLogTag, "Installing %v", b)
+
+	err := b.fs.Chmod(sourcePath, installDirsPerms)
 	if err != nil {
-		err = bosherr.WrapError(err, "failed to create install dir")
-		return
+		return nil, "", bosherr.WrapError(err, "Settting permissions on source directory")
 	}
 
-	fs = self.fs
-	return
-}
-
-func (self FileBundle) GetInstallPath() (fs boshsys.FileSystem, path string, err error) {
-	path = self.installPath
-	if !self.fs.FileExists(path) {
-		err = bosherr.New("install dir does not exist")
-		return
-	}
-
-	fs = self.fs
-	return
-}
-
-func (self FileBundle) Enable() (fs boshsys.FileSystem, path string, err error) {
-	if !self.fs.FileExists(self.installPath) {
-		err = bosherr.New("bundle must be installed")
-		return
-	}
-
-	err = self.fs.MkdirAll(filepath.Dir(self.enablePath), os.FileMode(0755))
+	err = b.fs.MkdirAll(filepath.Dir(b.installPath), installDirsPerms)
 	if err != nil {
-		err = bosherr.WrapError(err, "failed to create enable dir")
-		return
+		return nil, "", bosherr.WrapError(err, "Creating parent installation directory")
 	}
 
-	err = self.fs.Symlink(self.installPath, self.enablePath)
+	// Rename MUST be the last possibly-failing operation
+	// because IsInstalled() relies on installPath presence.
+	err = b.fs.Rename(sourcePath, b.installPath)
 	if err != nil {
-		err = bosherr.WrapError(err, "failed to enable")
-		return
+		return nil, "", bosherr.WrapError(err, "Moving to installation directory")
 	}
 
-	fs = self.fs
-	path = self.enablePath
-
-	return
+	return b.fs, b.installPath, nil
 }
 
-func (self FileBundle) Disable() (err error) {
-	target, err := self.fs.ReadLink(self.enablePath)
+func (b FileBundle) InstallWithoutContents() (boshsys.FileSystem, string, error) {
+	b.logger.Debug(fileBundleLogTag, "Installing without contents %v", b)
+
+	// MkdirAll MUST be the last possibly-failing operation
+	// because IsInstalled() relies on installPath presence.
+	err := b.fs.MkdirAll(b.installPath, installDirsPerms)
+	if err != nil {
+		return nil, "", bosherr.WrapError(err, "Creating installation directory")
+	}
+
+	return b.fs, b.installPath, nil
+}
+
+func (b FileBundle) GetInstallPath() (boshsys.FileSystem, string, error) {
+	path := b.installPath
+	if !b.fs.FileExists(path) {
+		return nil, "", bosherr.New("install dir does not exist")
+	}
+
+	return b.fs, path, nil
+}
+
+func (b FileBundle) IsInstalled() (bool, error) {
+	return b.fs.FileExists(b.installPath), nil
+}
+
+func (b FileBundle) Enable() (boshsys.FileSystem, string, error) {
+	b.logger.Debug(fileBundleLogTag, "Enabling %v", b)
+
+	if !b.fs.FileExists(b.installPath) {
+		return nil, "", bosherr.New("bundle must be installed")
+	}
+
+	err := b.fs.MkdirAll(filepath.Dir(b.enablePath), enableDirPerms)
+	if err != nil {
+		return nil, "", bosherr.WrapError(err, "failed to create enable dir")
+	}
+
+	err = b.fs.Symlink(b.installPath, b.enablePath)
+	if err != nil {
+		return nil, "", bosherr.WrapError(err, "failed to enable")
+	}
+
+	return b.fs, b.enablePath, nil
+}
+
+func (b FileBundle) Disable() error {
+	b.logger.Debug(fileBundleLogTag, "Disabling %v", b)
+
+	target, err := b.fs.ReadLink(b.enablePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			err = nil
-			return
+			return nil
 		}
-		err = bosherr.WrapError(err, "Reading symlink")
-		return
+		return bosherr.WrapError(err, "Reading symlink")
 	}
 
-	if target == self.installPath {
-		self.fs.RemoveAll(self.enablePath)
+	if target == b.installPath {
+		return b.fs.RemoveAll(b.enablePath)
 	}
-	return
+
+	return nil
 }
 
-func (self FileBundle) Uninstall() (err error) {
-	err = self.fs.RemoveAll(self.installPath)
-	return
+func (b FileBundle) Uninstall() error {
+	b.logger.Debug(fileBundleLogTag, "Uninstalling %v", b)
+
+	// RemoveAll MUST be the last possibly-failing operation
+	// because IsInstalled() relies on installPath presence.
+	return b.fs.RemoveAll(b.installPath)
 }
